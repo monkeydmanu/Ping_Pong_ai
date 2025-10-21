@@ -4,6 +4,58 @@ Fonctions de collision balle ↔ raquette / filet / table
 
 from config import RESTITUTION, TABLE_Y
 
+# a = 0.35 pour de la mousse et 0.22 pour la table
+# v0 = 200 m/s pour la mousse et 250 pour la table
+def restitution_verticale(v, v0, a):
+    """
+    Calcule le coefficient de restitution vertical ey selon la formule empirique :
+        ey = 1 - (v / v0)**a
+
+    Parameters:
+    -----------
+    v : float
+        Vitesse verticale de la balle avant impact (m/s)
+    v0 : float
+        Vitesse caractéristique du matériau (m/s)
+    a : float
+        Exposant empirique lié au matériau (dimensionless)
+
+    Returns:
+    --------
+    ey : float
+        Coefficient de restitution vertical
+    """
+    ey = 1 - (v / v0) ** a
+    # On s'assure que ey reste positif
+    ey = max(0.0, ey)
+    return ey
+
+
+# k qui vaut 0.2 pour une balle en mousse disons, 0.08 pour une table rigide, R peut valoir 0.02 pour 2 cm
+def restitution_spin(R, vitesse_angulaire_ini, v_x, k):
+    """
+    Calcule la vitesse angulaire après impact selon la vitesse horizontale et le coefficient k.
+    
+    Paramètres:
+    -----------
+    R : float
+        Rayon de la balle (m)
+    vitesse_angulaire_ini : float
+        Vitesse angulaire avant impact (rad/s)
+    v_x : float
+        Vitesse horizontale de la balle avant impact (m/s)
+    k : float
+        Coefficient de conversion friction → rotation (adimensionnel)
+        
+    Retour:
+    -------
+    vitesse_angulaire_fin : float
+        Vitesse angulaire après impact (rad/s)
+    """
+    vitesse_angulaire_fin = vitesse_angulaire_ini + k * v_x / R
+    return vitesse_angulaire_fin
+
+
 def adjust_spin_for_corner(angular_speed, ratio, is_left_corner=True):
     """
     Ajuste la vitesse angulaire selon le coin et le ratio.
@@ -23,12 +75,16 @@ def adjust_spin_for_corner(angular_speed, ratio, is_left_corner=True):
         else:
             return angular_speed * (1 - 0.8 * ratio) + 0.8 * ratio * abs(angular_speed)  # tend vers positif
 
-def reduction_speed(vx, vy, restitution):
-    vx *= restitution
-    vy *= restitution
+def reduction_speed(vx, vy, restitution, est_mousse):
+    if est_mousse:
+        vx *= restitution
+        vy *= restitution_verticale(vy, 200, 0.35)
+    else:
+        vx *= restitution
+        vy *= restitution_verticale(vy, 250, 0.22)
     return vx, vy
 
-def check_rect_collision(ball, rectangle, restitution=RESTITUTION, spin_factor=0.2):
+def check_rect_collision(ball, rectangle, est_mousse, est_table,restitution=RESTITUTION, spin_factor=0.2):
     """
     Gestion du rebond sur un rectangle incluant coins gauche/droite avec :
     - ratio basé sur le bord pour un effet plus marqué
@@ -61,7 +117,7 @@ def check_rect_collision(ball, rectangle, restitution=RESTITUTION, spin_factor=0
         # Atténuation du spin
         ball.angular_speed *= 0.8
 
-        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution)
+        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution, est_mousse, est_table)
 
     # Cas 2 : collision classique sur la surface mais en dessous
     if y + h < ball_center_y <= y + h + ball.radius and x <= ball_center_x <= x + w:
@@ -87,7 +143,7 @@ def check_rect_collision(ball, rectangle, restitution=RESTITUTION, spin_factor=0
         # Coin gauche
         ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=True)
         
-        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution)
+        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution, est_mousse, est_table)
 
     # Cas 4 : coin haut droit
     elif y - ball.radius < ball_center_y <= y and x + w + ball.radius > ball_center_x > x + w:
@@ -104,7 +160,7 @@ def check_rect_collision(ball, rectangle, restitution=RESTITUTION, spin_factor=0
         # Coin droit
         ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=False)
 
-        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution)
+        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution, est_mousse, est_table)
 
     # Cas 5 : coin bas gauche
     elif y + h < ball_center_y <= y + h + ball.radius and x - ball.radius < ball_center_x < x:
@@ -123,7 +179,7 @@ def check_rect_collision(ball, rectangle, restitution=RESTITUTION, spin_factor=0
         # Coin gauche
         ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=True)
 
-        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution)
+        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution, est_mousse, est_table)
 
     # Cas 6 : coin bas droit
     elif y + h < ball_center_y <= y + h + ball.radius and x + w + ball.radius > ball_center_x > x + w:
@@ -140,13 +196,13 @@ def check_rect_collision(ball, rectangle, restitution=RESTITUTION, spin_factor=0
         # Coin droit
         ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=False)
 
-        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution)
+        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], restitution, est_mousse, est_table)
 
 
 
 
 def check_table_collision(ball, table):
-    check_rect_collision(ball, table)
+    check_rect_collision(ball, table, est_mousse=False, est_table=True)
 
 
 
@@ -179,7 +235,7 @@ def check_ball_net(ball, net, restitution=RESTITUTION, spin_factor=0.3, spin_dam
     - spin_factor : influence de l'angular_speed sur vel_y
     - spin_damping : perte de spin après collision
     """
-    check_rect_collision(ball, net)
+    check_rect_collision(ball, net, est_mousse=False, est_table=True)
     x, y, w, h = net.get_rect()
     center_x = x + w/2
 
