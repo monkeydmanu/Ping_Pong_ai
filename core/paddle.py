@@ -5,10 +5,10 @@ Classe représentant une raquette
 """
 
 import numpy as np
-from config import HEIGHT, WIDTH
+from config import HEIGHT, WIDTH, RACKET_HEIGHT_PX, RACKET_WIDTH_PX
 
 class Paddle:
-    def __init__(self, x, y, width=10, height=60, speed=10, max_speed=500):
+    def __init__(self, x, y, width=RACKET_WIDTH_PX, height=RACKET_HEIGHT_PX, speed=10, max_speed=500):
         self.pos = np.array([x, y], dtype=float)  # Position
         self.width = width
         self.height = height
@@ -59,12 +59,14 @@ class Paddle:
     def stop_horizontal(self):
         self.vel[0] = 0
 
-    # Rotation
+    # Rotation, sens trigo
     def rotate_left(self, dt, rotation_speed=6):
-        self.angle -= rotation_speed * dt
+        self.angle += rotation_speed * dt
+        self.angle %= 360
 
     def rotate_right(self, dt, rotation_speed=6):
-        self.angle += rotation_speed * dt
+        self.angle -= rotation_speed * dt
+        self.angle %= 360
 
     # Retourne les infos essentielles pour collision/affichage
     def get_info(self):

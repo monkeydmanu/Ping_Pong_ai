@@ -4,7 +4,7 @@ Boucle principale du jeu et gestion des entités.
 
 import pygame
 from core.ball import Ball
-from config import WIDTH, HEIGHT, GREEN, DT
+from config import WIDTH, HEIGHT, GREEN, FPS
 from graphics.renderer import draw_background, draw_table, draw_ball, draw_paddle, draw_net
 from core.paddle import Paddle
 from core.net import Net
@@ -27,8 +27,8 @@ class Game:
         # Balles de test
         x_table, y_table, w_table, h_table = self.table.get_rect()
         self.balls = [
-            Ball(x=20, y=y_table + h_table - 10, vx=200, vy=0, angular_speed=-300),
-            Ball(x=498, y=y_table - 200, vx=100, vy=0, angular_speed=-500),
+            #Ball(x=20, y=y_table + h_table - 10, vx=200, vy=0, angular_speed=-300),
+            Ball(x=698, y=y_table - 100, vx=100, vy=0, angular_speed=-300),
             #Ball(x=x_table - 4, y=y_table - 200, vx=0, vy=-200, angular_speed=100),
             #Ball(x=x_table - 9, y=y_table - 200, vx=0, vy=-200, angular_speed=100),              # coin gauche
             #Ball(x=x_table - 5, y=y_table - 100, vx=0, vy=-150, angular_speed=-100),          # proche coin gauche
@@ -78,9 +78,9 @@ class Game:
 
         # Rotation
         if keys[pygame.K_a]:
-            self.player.rotate_left(DT*60)
+            self.player.rotate_left(FPS/60)
         if keys[pygame.K_e]:
-            self.player.rotate_right(DT*60)
+            self.player.rotate_right(FPS/60)
 
     def update(self):
         """Met à jour l'état du jeu (physique, logique)."""
@@ -92,7 +92,7 @@ class Game:
             check_ball_paddle(ball, self.opponent)
             check_ball_net(ball, self.net)
         for player in self.players:
-            player.update(DT*60)
+            player.update(FPS/60)
 
     def draw(self):
         """Dessine les éléments à l’écran."""
