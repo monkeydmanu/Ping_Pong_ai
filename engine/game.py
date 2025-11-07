@@ -28,7 +28,7 @@ class Game:
         x_table, y_table, w_table, h_table = self.table.get_rect()
         self.balls = [
             #Ball(x=20, y=y_table + h_table - 10, vx=200, vy=0, angular_speed=-300),
-            Ball(x=698, y=y_table - 100, vx=100, vy=0, angular_speed=-300),
+            Ball(x=598, y=y_table - 200, vx=-100, vy=0, angular_speed=-500),
             #Ball(x=x_table - 4, y=y_table - 200, vx=0, vy=-200, angular_speed=100),
             #Ball(x=x_table - 9, y=y_table - 200, vx=0, vy=-200, angular_speed=100),              # coin gauche
             #Ball(x=x_table - 5, y=y_table - 100, vx=0, vy=-150, angular_speed=-100),          # proche coin gauche
@@ -78,9 +78,9 @@ class Game:
 
         # Rotation
         if keys[pygame.K_a]:
-            self.player.rotate_left(FPS/60)
+            self.player.rotate_left(1)
         if keys[pygame.K_e]:
-            self.player.rotate_right(FPS/60)
+            self.player.rotate_right(1)
 
     def update(self):
         """Met à jour l'état du jeu (physique, logique)."""
@@ -88,10 +88,9 @@ class Game:
             ball.update()
             # collisions
             check_table_collision(ball, self.table)
-            check_ball_paddle(ball, self.player)
-            check_ball_paddle(ball, self.opponent)
             check_ball_net(ball, self.net)
         for player in self.players:
+            check_ball_paddle(ball, player, self.screen)
             player.update(FPS/60)
 
     def draw(self):

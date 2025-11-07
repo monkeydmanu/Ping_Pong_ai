@@ -2,6 +2,7 @@
 Fonctions de collision balle ↔ raquette / filet / table
 """
 
+import pygame
 import numpy as np
 from config import RESTITUTION, TABLE_Y, VPX_FRAME_MAX
 
@@ -156,7 +157,7 @@ def reduction_speed(vx, vy, est_mousse):
     return vx, vy
 
 def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
-                             rect_x, rect_y, width, height, angle_deg):
+                             rect_x, rect_y, width, height, angle_deg, screen=None):
     """
     Retourne (hit, contact_world, normal_world, tangent_world, face)
     - hit: bool collision
@@ -166,6 +167,7 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
     - face: 'haut' / 'bas' / 'gauche' / 'droite' / 'inside' / 'corner'
     Note: angle_deg est l'angle Pygame (0° = haut, anti-horaire).
     """
+
     # 0) Setup
     half_w = width / 2.0
     half_h = height / 2.0
@@ -173,8 +175,8 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
     rect_cy = rect_y + half_h   # centre du rectangle (y)
 
     # 1) conversion angle Pygame -> angle trigonométrique (0° = droite)
-    angle_deg = (angle_deg+90)%360 # 0 degré jeu => 90 degré vrai,    45 degrés => 135 degrés vrai
-    theta = np.radians(angle_deg - 90.0)
+    angle_deg = angle_deg
+    theta = np.radians(angle_deg)
 
     # 2) translation balle -> repère centré sur rectangle
     dx = ball_center_x - rect_cx
@@ -202,8 +204,12 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
     tangent_world = None
     face = None
 
-    if not hit:
-        return False, contact_world, normal_world, tangent_world, face
+
+
+    # c'était ici le if not hit return
+
+
+
 
     # 6) point de contact en coordonnées locales (repère non-roté)
     contact_local_x = closest_x
@@ -261,6 +267,7 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
     # 9) normale locale -> normale monde (rotation)
     nx_world = n_local[0] * cos_t_forward - n_local[1] * sin_t_forward
     ny_world = n_local[0] * sin_t_forward + n_local[1] * cos_t_forward
+
     # normaliser par sécurité la normale pour qu'elle est une norme de 1
     norm = np.hypot(nx_world, ny_world)
     if norm != 0:
@@ -271,10 +278,41 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
     tx_world, ty_world = -ny_world, nx_world
     tangent_world = (tx_world, ty_world)
 
+    # 11) Affichage Pygame du rectangle (après rotation)
+    if screen is not None:
+    # Coins locaux du rectangle
+        corners_local = [
+            (-half_w, -half_h),
+            ( half_w, -half_h),
+            ( half_w,  half_h),
+            (-half_w,  half_h)
+        ]
+        corners_world = []
+        for x, y in corners_local:
+            wx = x * cos_t_forward - y * sin_t_forward + rect_cx
+            wy = x * sin_t_forward + y * cos_t_forward + rect_cy
+            corners_world.append((int(wx), int(wy)))
+        
+        # Tracer le rectangle et son centre toujours
+        pygame.draw.polygon(screen, (0, 255, 0), corners_world, 2)
+        pygame.draw.circle(screen, (255, 0, 0), (int(rect_cx), int(rect_cy)), 4)
+
+        # Tracer la balle toujours
+        pygame.draw.circle(screen, (255, 255, 0), (int(ball_center_x), int(ball_center_y)), int(radius), 1)
+
+        # Tracer le point de contact uniquement si collision
+        if hit:
+            pygame.draw.circle(screen, (0, 0, 255),
+                            (int(contact_world[0]), int(contact_world[1])), 4)
+            
+    
+    if not hit:
+        return False, contact_world, normal_world, tangent_world, face
+
     return True, contact_world, normal_world, tangent_world, face
 
 # a=0.35 pour la mousse et 0.22 pour la table
-def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=0.2):
+def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=0.2, screen=None):
     """
     Gestion du rebond sur un rectangle incluant coins gauche/droite avec :
     - ratio basé sur le bord pour un effet plus marqué
@@ -283,7 +321,7 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
     ball_center_x = ball.pos[0]
     ball_center_y = ball.pos[1]
 
-    signe_x = abs(ball.angular_speed) / ball.angular_speed >= 0 # True si spin positif
+    signe_x = (ball.angular_speed) >= 0 # True si spin positif
     signe_y = (ball.angular_speed * ball.vel[0] >= 0)
 
     if est_mousse:
@@ -292,36 +330,39 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
     elif est_table:
         x, y, width, height = rectangle.get_rect()
         vel_x, vel_y = 0, 0
-        angle = -90 # on ajoutera 90 après
+        angle = 0 # on ajoutera 90 après
     else: # filet
-        x, y, vel_x, vel_y, angle, width, height = rectangle.get_rect()
+        x, y, width, height = rectangle.get_rect()
         vel_x, vel_y = 0, 0
         angle = 0 # on ajoutera 90 après
 
     hit, contact, normal, tangent, face = contact_cercle_rectangle(
         ball_center_x, ball_center_y, ball.radius,
-        x, y, width, height, angle
+        x, y, width, height, angle, screen
     )
 
     if hit:
-        print("Face:", face, "contact:", contact, "normal:", normal)
+
+        # Repositionnement pour éviter l'enfoncement
+        ball.pos[0] = contact[0] + normal[0] * ball.radius
+        ball.pos[1] = contact[1] + normal[1] * ball.radius
+
         # appliquer la réflexion selon la normale
         v_dot_n = ball.vel[0]*normal[0] + ball.vel[1]*normal[1]
         ball.vel[0] -= 2 * v_dot_n * normal[0]
         ball.vel[1] -= 2 * v_dot_n * normal[1]
 
-    # Ratio basé sur le spin
-    max_spin = 500.0
-    ratio = min(1.0, abs(ball.angular_speed) / max_spin)
+        # Ratio basé sur le spin
+        max_spin = 500.0
+        ratio = min(1.0, abs(ball.angular_speed) / max_spin)
 
-    # Redistribution de l'énergie
-    #ball.vel[0] += abs(ball.angular_speed) * spin_factor * (ratio if signe_x else -ratio)
-    #ball.vel[1] += abs(ball.angular_speed) * spin_factor * (ratio) * (-1 if signe_y > 0 else 1)
+        # Redistribution de l'énergie
+        ball.vel[0] += abs(ball.angular_speed) * spin_factor * (ratio if signe_x else -ratio)
+        ball.vel[1] += abs(ball.angular_speed) * spin_factor * (ratio) * (1 if signe_y else -1) # si dans le même sens alors on descend (positif) sinon on monte (negatif)
 
-    #ball.angular_speed *= 0.8
+        ball.angular_speed *= 0.8
 
-    #ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
-
+        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
 
 
 
@@ -455,25 +496,8 @@ def check_table_collision(ball, table):
 
 
 
-def check_ball_paddle(ball, paddle):
-
-    center_x, center_y, vel_x, vel_y, angle, width, height = paddle.get_info()
-
-    check_rect_collision(ball, paddle, est_mousse=True, est_table=False, a=0.35) # pour les coins supérieur et au dessus
-    # pour les côtés
-    x, y, w, h = paddle.get_rect()
-    center_x = x + w/2
-
-    # collision verticale avec le filet
-    if y <= ball.pos[1] <= y + h and x <= ball.pos[0] <= x + w:
-        # replacer la balle à gauche ou droite du filet
-        if ball.pos[0] < center_x:
-            ball.pos[0] = x - ball.radius
-        else:
-            ball.pos[0] = x + w + ball.radius
-
-        ball.vel[0] = -ball.vel[0] * 0.9
-
+def check_ball_paddle(ball, paddle, screen):
+    check_rect_collision(ball, paddle, est_mousse=True, est_table=False, a=0.35, screen=screen)
 
 def check_ball_net(ball, net, restitution=RESTITUTION, spin_factor=0.3, spin_damping=0.8):
     """
@@ -484,29 +508,6 @@ def check_ball_net(ball, net, restitution=RESTITUTION, spin_factor=0.3, spin_dam
     - spin_factor : influence de l'angular_speed sur vel_y
     - spin_damping : perte de spin après collision
     """
-    check_rect_collision(ball, net, est_mousse=False, est_table=True, a=0.22)
-    x, y, w, h = net.get_rect()
-    center_x = x + w/2
+    check_rect_collision(ball, net, est_mousse=False, est_table=False, a=0.22)
 
-    # collision verticale avec le filet
-    if y <= ball.pos[1] <= y + h and x <= ball.pos[0] <= x + w:
-        # replacer la balle à gauche ou droite du filet
-        if ball.pos[0] < center_x:
-            ball.pos[0] = x - ball.radius
-            direction_x = -1  # rebond vers la gauche
-        else:
-            ball.pos[0] = x + w + ball.radius
-            direction_x = 1   # rebond vers la droite
-
-        # transfert de vitesse selon le spin
-        ratio = min(1.0, abs(ball.angular_speed) / 500.0)  # normalisation selon spin max observé, 300 c'est arbitraire, représentant le spin à partir duquel on le considère très grand
-
-        # vel_x diminue selon le spin
-        ball.vel[0] = -ball.vel[0] * restitution * (1 - 0.5 * ratio)
-
-        # vel_y dépend du spin
-        ball.vel[1] = direction_x * ball.angular_speed * spin_factor
-
-        # réduire le spin après collision
-        ball.angular_speed *= spin_damping
 

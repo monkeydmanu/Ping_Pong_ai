@@ -75,7 +75,7 @@ def draw_paddle(screen, paddle, color):
     
     # Rotation de la surface
     angle = (angle)%360
-    rotated_surf = pygame.transform.rotate(paddle_surf, angle)  # pygame tourne dans le sens antihoraire
+    rotated_surf = pygame.transform.rotate(paddle_surf, -angle)  # pygame tourne dans le sens antihoraire
     
     # Nouveau rectangle centré après rotation
     new_rect = rotated_surf.get_rect(center=(center_x, center_y))

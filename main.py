@@ -1,4 +1,4 @@
-"""
+"""e
 Point d'entrée du jeu de ping-pong.
 """
 

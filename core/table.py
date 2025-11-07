@@ -2,15 +2,15 @@
 Classe représentant la table de ping-pong.
 """
 
-from config import WIDTH, HEIGHT, TABLE_Y, COEF_TAILLE_TABLE
+from config import WIDTH, HEIGHT, TABLE_Y, TABLE_WIDTH_PX, TABLE_HEIGHT_PX, PIXELS_PER_METER
 
 class Table:
-    def __init__(self, width=None, height=None):
+    def __init__(self, width=TABLE_WIDTH_PX, height=TABLE_HEIGHT_PX):
         # Largeur et hauteur de la table
-        self.width = width if width is not None else WIDTH * COEF_TAILLE_TABLE  # 80% de l'écran par défaut
-        self.height = height if height is not None else 30       # hauteur fixe par défaut
+        self.width = width
+        self.height = height
         # Position pour centrer horizontalement
-        self.x = (WIDTH - self.width) / 2
+        self.x = WIDTH // 2 - width //2
         # Position verticale sur l'écran
         self.y = TABLE_Y
 
