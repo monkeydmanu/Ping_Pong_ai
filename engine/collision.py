@@ -175,7 +175,6 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
     rect_cy = rect_y + half_h   # centre du rectangle (y)
 
     # 1) conversion angle Pygame -> angle trigonométrique (0° = droite)
-    angle_deg = angle_deg
     theta = np.radians(angle_deg)
 
     # 2) translation balle -> repère centré sur rectangle
@@ -203,12 +202,10 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
     normal_world = None
     tangent_world = None
     face = None
-
+    corner_ratio = None
 
 
     # c'était ici le if not hit return
-
-
 
 
     # 6) point de contact en coordonnées locales (repère non-roté)
@@ -246,16 +243,29 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
         else:
             face = 'bas'; n_local = (0.0, 1.0)
     else:
-        # both outside -> coin (on l'ignore pour l'instant)
-        face = 'corner'
-        # on peut renvoyer la normale approximée du vecteur center->closest
+        # Coin : déterminer lequel
+        left  = rx < -half_w
+        right = rx >  half_w
+        top   = ry < -half_h
+        bottom= ry >  half_h
+        if left and top:
+            face = 'corner_hg'
+            dist_edge_x = (-half_w) - rx  # positif
+        elif right and top:
+            face = 'corner_hd'
+            dist_edge_x = rx - half_w
+        elif left and bottom:
+            face = 'corner_bg'
+            dist_edge_x = (-half_w) - rx
+        else:
+            face = 'corner_bd'
+            dist_edge_x = rx - half_w
+        # ratio basé sur distance horizontale
+        corner_ratio = min(1.0, abs(dist_edge_x) / radius)
         nx_local = rx - closest_x
         ny_local = ry - closest_y
         length = np.hypot(nx_local, ny_local)
-        if length == 0:
-            n_local = (0.0, 0.0)
-        else:
-            n_local = (nx_local/length, ny_local/length)
+        n_local = (0.0, 0.0) if length == 0 else (nx_local/length, ny_local/length)
 
     # 8) projeter contact_local -> monde (rotation + translation)
     cos_t_forward = np.cos(theta)
@@ -307,9 +317,9 @@ def contact_cercle_rectangle(ball_center_x, ball_center_y, radius,
             
     
     if not hit:
-        return False, contact_world, normal_world, tangent_world, face
+        return False, contact_world, normal_world, tangent_world, face, corner_ratio
 
-    return True, contact_world, normal_world, tangent_world, face
+    return True, contact_world, normal_world, tangent_world, face, corner_ratio
 
 # a=0.35 pour la mousse et 0.22 pour la table
 def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=0.2, screen=None):
@@ -336,17 +346,44 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
         vel_x, vel_y = 0, 0
         angle = 0 # on ajoutera 90 après
 
-    hit, contact, normal, tangent, face = contact_cercle_rectangle(
+    hit, contact, normal, tangent, face, corner_ratio = contact_cercle_rectangle(
         ball_center_x, ball_center_y, ball.radius,
         x, y, width, height, angle, screen
     )
 
-    if hit:
+    if not hit:
+        return
 
-        # Repositionnement pour éviter l'enfoncement
-        ball.pos[0] = contact[0] + normal[0] * ball.radius
-        ball.pos[1] = contact[1] + normal[1] * ball.radius
+    # Repositionnement pour éviter l'enfoncement
+    ball.pos[0] = contact[0] + normal[0] * ball.radius
+    ball.pos[1] = contact[1] + normal[1] * ball.radius
 
+    if face and face.startswith('corner_'):
+        # Ancienne logique coin
+        ratio = corner_ratio if corner_ratio is not None else 0.0
+        transfer = ratio * ball.vel[1]
+
+        # Direction horizontale
+        if 'hg' in face or 'bg' in face:  # gauche
+            ball.vel[0] = -abs(ball.vel[0]) - abs(transfer)
+            is_left_corner = True
+        else:  # droite
+            ball.vel[0] = abs(ball.vel[0]) + abs(transfer)
+            is_left_corner = False
+
+        # Direction verticale
+        if 'hg' in face or 'hd' in face:  # haut
+            ball.vel[1] = -abs(ball.vel[1]) * (1 - 0.5 * ratio)
+        else:  # bas
+            ball.vel[1] = abs(ball.vel[1]) * (1 - 0.5 * ratio)
+
+        # Ajustement spin
+        ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=is_left_corner)
+
+        # Réduction vitesses
+        ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
+
+    else:
         # appliquer la réflexion selon la normale
         v_dot_n = ball.vel[0]*normal[0] + ball.vel[1]*normal[1]
         ball.vel[0] -= 2 * v_dot_n * normal[0]
@@ -364,129 +401,6 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
 
         ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
 
-
-
-
-
-
-    # # Cas 1 : collision classique sur la surface au dessus
-    # if y - ball.radius < ball_center_y <= y and x <= ball_center_x <= x + w:
-
-    #     signe_y = (ball.angular_speed * ball.vel[0] >= 0)
-
-    #     ball.pos[1] = y - ball.radius
-
-    #     if est_mousse:
-    #         angle = rectangle.angle
-    #         angle = (angle+90)%360 # 0 degré jeu => 90 degré vrai,    45 degrés => 135 degrés vrai
-    #     else:
-    #         angle = 0
-    #     theta_rad = np.radians(angle)
-    #     n_x, n_y = -np.sin(theta_rad), np.cos(theta_rad)
-
-    #     print(n_x, n_y)
-    #     print("vitesse avant :")
-    #     print(ball.vel[0], ball.vel[1])
-
-    #     v_dot_n = ball.vel[0]*n_x + ball.vel[1]*n_y
-    #     ball.vel[0] = ball.vel[0] - 2 * v_dot_n * n_x
-    #     ball.vel[1] = ball.vel[1] - 2 * v_dot_n * n_y
-
-    #     print("vitesse milieu :")
-    #     print(ball.vel[0], ball.vel[1])
-
-    #     # Ratio basé sur le spin
-    #     max_spin = 500.0
-    #     ratio = min(1.0, abs(ball.angular_speed) / max_spin)
-
-    #     # Déterminer le signe pour savoir si le spin est dans le bon sens
-    #     signe_x = abs(ball.angular_speed) / ball.angular_speed >= 0 # True si spin positif
-
-    #     # Redistribution de l'énergie
-    #     ball.vel[0] += abs(ball.angular_speed) * spin_factor * (ratio if signe_x else -ratio)
-    #     ball.vel[1] += abs(ball.angular_speed) * spin_factor * (ratio) * (-1 if signe_y > 0 else 1)
-
-    #     print("vitesse après :")
-    #     print(ball.vel[0], ball.vel[1])
-
-    #     # Atténuation du spin
-    #     ball.angular_speed *= 0.8
-
-    #     ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
-
-    # # Cas 2 : collision classique sur la surface mais en dessous
-    # if y + h < ball_center_y <= y + h + ball.radius and x <= ball_center_x <= x + w:
-    #     ball.pos[1] = y + h + ball.radius
-    #     ball.vel[0] += spin_factor * ball.angular_speed
-    #     ball.angular_speed *= 0.8
-
-    # # Cas 3 : coin haut gauche
-    # elif y - ball.radius < ball_center_y <= y and x - ball.radius < ball_center_x < x:
-    #     ball.pos[1] = y - ball.radius
-    #     ball.pos[0] = x - ball.radius
-
-    #     # Ratio depuis le bord
-    #     ratio = min(1.0, abs(x - ball_center_x) / ball.radius)  # 0 = au bord, 1 = loin du bord
-    #     # Transfert vertical -> horizontal
-    #     transfer = ratio * ball.vel[1]
-    #     ball.vel[0] = -abs(ball.vel[0]) - abs(transfer)  # vers la gauche
-    #     ball.vel[1] = -abs(ball.vel[1]) * (1 - 0.5 * ratio) # vers le haut
-
-    #     # Ajustement spin selon ratio : tend vers négatif si ratio grand
-    #     # Coin gauche
-    #     ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=True)
-        
-    #     ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
-
-    # # Cas 4 : coin haut droit
-    # elif y - ball.radius < ball_center_y <= y and x + w + ball.radius > ball_center_x > x + w:
-    #     ball.pos[1] = y - ball.radius
-    #     ball.pos[0] = x + w + ball.radius
-
-    #     ratio = min(1.0, abs(ball_center_x - (x + w)) / ball.radius)
-    #     transfer = ratio * ball.vel[1]
-    #     ball.vel[0] = abs(ball.vel[0]) + abs(transfer)  # vers la droite
-    #     ball.vel[1] = -abs(ball.vel[1]) * (1 - 0.5 * ratio) # vers le haut
-
-    #     # Ajustement spin selon ratio : tend vers positif si ratio grand
-    #     # Coin droit
-    #     ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=False)
-
-    #     ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
-
-    # # Cas 5 : coin bas gauche
-    # elif y + h < ball_center_y <= y + h + ball.radius and x - ball.radius < ball_center_x < x:
-    #     ball.pos[1] = y + h + ball.radius
-    #     ball.pos[0] = x - ball.radius
-
-    #     # Ratio depuis le bord
-    #     ratio = min(1.0, abs(x - ball_center_x) / ball.radius)  # 0 = au bord, 1 = loin du bord
-    #     # Transfert vertical -> horizontal
-    #     transfer = ratio * ball.vel[1]
-    #     ball.vel[0] = -abs(ball.vel[0]) - abs(transfer)  # vers la gauche
-    #     ball.vel[1] = abs(ball.vel[1]) * (1 - 0.5 * ratio) # vers le bas
-
-    #     # Ajustement spin selon ratio : tend vers négatif si ratio grand
-    #     # Coin gauche
-    #     ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=True)
-
-    #     ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
-
-    # # Cas 6 : coin bas droit
-    # elif y + h < ball_center_y <= y + h + ball.radius and x + w + ball.radius > ball_center_x > x + w:
-    #     ball.pos[1] = y + h + ball.radius
-    #     ball.pos[0] = x + w + ball.radius
-
-    #     ratio = min(1.0, abs(ball_center_x - (x + w)) / ball.radius)
-    #     transfer = ratio * ball.vel[1]
-    #     ball.vel[0] = abs(ball.vel[0]) + abs(transfer)  # vers la droite
-    #     ball.vel[1] = abs(ball.vel[1]) * (1 - 0.5 * ratio) # vers le bas
-
-    #     # Ajustement spin selon ratio : tend vers positif si ratio grand
-    #     # Coin droit
-    #     ball.angular_speed = adjust_spin_for_corner(ball.angular_speed, ratio, is_left_corner=False)
-
-    #     ball.vel[0], ball.vel[1] = reduction_speed(ball.vel[0], ball.vel[1], est_mousse)
 
 
 
