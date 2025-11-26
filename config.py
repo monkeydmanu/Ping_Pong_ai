@@ -45,10 +45,11 @@ AIR_DENSITY = 1.2           # densité de l'air (kg/m³)
 MAGNUS_COEFFICIENT = 0.5    # coefficient de lift (Cl) — empirique, ajustable
 DRAG_COEFFICIENT = 0.4      # coefficient de traînée (Cd) — pour une sphère lisse
 
-# --- Constante de ping pong de vitesse utile --- 
+# --- Constante de ping pong de vitesse utile --- 
 V_MAX_REEL = 120 # m/s
 VPX_FRAME_MAX = V_MAX_REEL * PIXELS_PER_METER / FPS
-SPEED_RACKET = 1.5 * PIXELS_PER_METER / FPS
+# Vitesse raquette : 4.0 m/s en réel
+SPEED_RACKET = 4.0 * PIXELS_PER_METER  # pixels/s (sera multiplié par dt=1/FPS)
 
 # --- Couleurs (R, G, B) ---
 GREEN = (40, 150, 60)

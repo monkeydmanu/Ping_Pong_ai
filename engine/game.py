@@ -23,12 +23,19 @@ class Game:
         self.players = [self.player, self.opponent]
         self.net = Net()
         self.table = Table()
+        
+        # Pour afficher la vitesse
+        self.font = pygame.font.Font(None, 36)
+        self.debug_timer = 0  # compteur pour affichage toutes les 0.5s
+        self.last_ball_vel = (0, 0)
+        self.last_paddle_vel = (0, 0)
+        self.last_spin = 0
 
         # Balles de test
         x_table, y_table, w_table, h_table = self.table.get_rect()
         self.balls = [
             #Ball(x=20, y=y_table + h_table - 10, vx=200, vy=0, angular_speed=-300),
-            Ball(x=300, y=y_table - 200, vx=0, vy=0, angular_speed=500),
+            Ball(x=400, y=y_table - 300, vx=0, vy=0, angular_speed=0),
             #Ball(x=x_table - 4, y=y_table - 200, vx=0, vy=-200, angular_speed=100),
             #Ball(x=x_table - 9, y=y_table - 200, vx=0, vy=-200, angular_speed=100),              # coin gauche
             #Ball(x=x_table - 5, y=y_table - 100, vx=0, vy=-150, angular_speed=-100),          # proche coin gauche
@@ -84,6 +91,17 @@ class Game:
 
     def update(self):
         """Met à jour l'état du jeu (physique, logique)."""
+        # Timer pour affichage debug toutes les 0.5s
+        self.debug_timer += 1
+        if self.debug_timer >= 30:  # 30 frames à 60fps = 0.5s
+            self.debug_timer = 0
+            if self.balls:
+                ball = self.balls[0]
+                self.last_ball_vel = (ball.vel[0], ball.vel[1])
+                self.last_paddle_vel = (self.player.vel[0], self.player.vel[1])
+                self.last_spin = ball.angular_speed
+                print(f"Balle: vx={ball.vel[0]:.1f}, vy={ball.vel[1]:.1f} | Raquette: vx={self.player.vel[0]:.1f}, vy={self.player.vel[1]:.1f} | Spin: {ball.angular_speed:.1f}")
+        
         for ball in self.balls:
             ball.update()
             # collisions
@@ -91,10 +109,10 @@ class Game:
             check_ball_net(ball, self.net)
         for player in self.players:
             check_ball_paddle(ball, player, self.screen)
-            player.update(FPS/60)
+            player.update(1.0/FPS)  # dt = 1/120 = 0.0083s par frame
 
     def draw(self):
-        """Dessine les éléments à l’écran."""
+        """Dessine les éléments à l'écran."""
         draw_background(self.screen)
         draw_table(self.screen, self.table)
         for ball in self.balls:
@@ -102,4 +120,16 @@ class Game:
         draw_paddle(self.screen, self.player, (255, 0, 0))
         draw_paddle(self.screen, self.opponent, (0, 0, 0))
         draw_net(self.screen, self.net)
+        
+        # Affichage debug des vitesses à l'écran
+        vel_text = f"Balle: vx={self.last_ball_vel[0]:.0f} vy={self.last_ball_vel[1]:.0f}"
+        paddle_text = f"Raquette: vx={self.last_paddle_vel[0]:.0f} vy={self.last_paddle_vel[1]:.0f}"
+        spin_text = f"Spin: {self.last_spin:.0f}"
+        text_surface = self.font.render(vel_text, True, (255, 255, 255))
+        text_surface2 = self.font.render(paddle_text, True, (255, 255, 0))
+        text_surface3 = self.font.render(spin_text, True, (0, 255, 255))
+        self.screen.blit(text_surface, (10, 10))
+        self.screen.blit(text_surface2, (10, 40))
+        self.screen.blit(text_surface3, (10, 70))
+        
         pygame.display.flip()

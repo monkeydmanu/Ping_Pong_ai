@@ -8,19 +8,24 @@ import numpy as np
 from config import HEIGHT, WIDTH, RACKET_HEIGHT_PX, RACKET_WIDTH_PX, SPEED_RACKET
 
 class Paddle:
-    def __init__(self, x, y, width=RACKET_WIDTH_PX, height=RACKET_HEIGHT_PX, speed=SPEED_RACKET, max_speed=500):
+    def __init__(self, x, y, width=RACKET_WIDTH_PX, height=RACKET_HEIGHT_PX, speed=SPEED_RACKET, max_speed=None):
         self.pos = np.array([x, y], dtype=float)  # Position
         self.width = width
         self.height = height
-        self.speed = speed  # Vitesse de déplacement par défaut
-        self.max_speed = max_speed  # Vitesse maximale en x ou y
+        self.speed = speed  # Vitesse maximale de déplacement
+        self.max_speed = max_speed if max_speed else speed  # Vitesse max = speed par défaut
         self.vel = np.array([0.0, 0.0], dtype=float)  # vélocité [vx, vy]
         self.angle = 0  # Rotation libre de la raquette
+        self.acceleration = speed * 30  # Accélération très rapide (quasi instantanée)
+        self.friction = 15  # Friction pour ralentir quand on lâche
 
     # Mise à jour de la position selon la vélocité et le dt
     def update(self, dt):
-        # Limite la vitesse
-        self.vel = np.clip(self.vel, -self.max_speed, self.max_speed)
+        # Limite la vitesse au max
+        speed_magnitude = np.linalg.norm(self.vel)
+        if speed_magnitude > self.max_speed:
+            self.vel = self.vel / speed_magnitude * self.max_speed
+        
         self.pos += self.vel * dt
 
         # Limite verticale pour ne pas sortir de l'écran
@@ -39,25 +44,25 @@ class Paddle:
             self.pos[0] = WIDTH - self.width
             self.vel[0] = 0
 
-    # Mouvement vertical direct (ex: touches)
+    # Mouvement vertical avec accélération
     def move_up(self):
-        self.vel[1] = -self.speed
+        self.vel[1] -= self.acceleration * (1.0 / 120.0)  # accélère vers le haut
 
     def move_down(self):
-        self.vel[1] = self.speed
+        self.vel[1] += self.acceleration * (1.0 / 120.0)  # accélère vers le bas
 
     def stop_vertical(self):
-        self.vel[1] = 0
+        self.vel[1] = 0  # Arrêt instantané
 
-    # Mouvement horizontal direct (pour futur usage)
+    # Mouvement horizontal avec accélération
     def move_left(self):
-        self.vel[0] = -self.speed
+        self.vel[0] -= self.acceleration * (1.0 / 120.0)
 
     def move_right(self):
-        self.vel[0] = self.speed
+        self.vel[0] += self.acceleration * (1.0 / 120.0)
 
     def stop_horizontal(self):
-        self.vel[0] = 0
+        self.vel[0] = 0  # Arrêt instantané
 
     # Rotation, sens trigo
     def rotate_left(self, dt, rotation_speed=6):

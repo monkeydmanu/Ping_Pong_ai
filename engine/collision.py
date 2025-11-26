@@ -8,7 +8,7 @@ from config import RESTITUTION, TABLE_Y, VPX_FRAME_MAX
 
 # a = 0.35 pour de la mousse et 0.22 pour la table
 # v0 = 200 m/s pour la mousse et 250 pour la table
-def restitution_verticale(vy, v0, a, ey_min=0.7):
+def restitution_verticale(vy, v0, a, ey_min=0.85):
     """
     Calcule ey (coeff. de restitution vertical) en fonction de la vitesse verticale vy.
 
@@ -16,7 +16,7 @@ def restitution_verticale(vy, v0, a, ey_min=0.7):
       vy      : float, vitesse verticale (m/s) — signe ignoré (on utilise |vy|)
       v0      : float, vitesse de référence (m/s) — pour laquelle ey doit atteindre ey_min
       a       : float, exposant contrôlant la pente (plus a grand → moins de restitution)
-      ey_min  : float, valeur minimale de ey (par défaut 0.7)
+      ey_min  : float, valeur minimale de ey (par défaut 0.85)
 
     Retour :
       ey : float dans [ey_min, 1]
@@ -40,7 +40,7 @@ def restitution_verticale(vy, v0, a, ey_min=0.7):
 # pour le moment on prend la même que y
 # a = 0.35 pour de la mousse et 0.22 pour la table
 # v0 = 200 m/s pour la mousse et 250 pour la table
-def restitution_tangentielle(vx, v0, a, ex_min=0.7):
+def restitution_tangentielle(vx, v0, a, ex_min=0.85):
     """
     Calcule le coefficient de restitution tangentielle ex selon la formule empirique :
         ex = 1 - (vx / vx0)**a
@@ -302,9 +302,17 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
     if not hit:
         return
 
+    # Éviter les collisions multiples avec la raquette (cooldown de 0.2s = 24 frames à 120fps)
+    if est_mousse and ball.collision_cooldown > 0:
+        return
+
     # Repositionnement pour éviter l'enfoncement
     ball.pos[0] = contact[0] + normal[0] * ball.radius
     ball.pos[1] = contact[1] + normal[1] * ball.radius
+    
+    # Activer le cooldown pour la raquette
+    if est_mousse:
+        ball.collision_cooldown = 24  # 0.2 secondes à 120fps
 
     if face and face.startswith('corner_'):
         # Ancienne logique coin
@@ -337,7 +345,26 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
         ball.vel[0] -= 2 * v_dot_n * normal[0]
         ball.vel[1] -= 2 * v_dot_n * normal[1]
 
-        # Ratio basé sur le spin
+        # === TRANSFERT VITESSE RAQUETTE → BALLE (seulement pour la mousse/raquette) ===
+        if est_mousse:
+            # Facteur de transfert de vitesse
+            velocity_transfer = 0.7  # 70% de la vitesse transférée
+            
+            # Ajouter la vitesse de la raquette à la balle
+            ball.vel[0] += vel_x * velocity_transfer
+            ball.vel[1] += vel_y * velocity_transfer
+            
+            # === GÉNÉRATION DE SPIN PAR LE MOUVEMENT TANGENTIEL ===
+            # Calculer la composante tangentielle de la vitesse de la raquette
+            # (mouvement parallèle à la surface = "brossage")
+            paddle_vel_tangent = vel_x * tangent[0] + vel_y * tangent[1]
+            
+            # Plus le mouvement tangentiel est fort, plus on génère de spin
+            # Le signe dépend de la direction du brossage
+            spin_generation = 0.08  # facteur de conversion tangent → spin
+            ball.angular_speed += paddle_vel_tangent * spin_generation
+
+        # Ratio basé sur le spin (existant)
         max_spin = 500.0
         ratio = min(1.0, abs(ball.angular_speed) / max_spin)
 
