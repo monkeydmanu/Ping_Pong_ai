@@ -76,58 +76,6 @@ def restitution_tangentielle(vx, v0, a, ex_min=0.7):
     return ex
 
 
-
-# # k qui vaut 0.2 pour une balle en mousse disons, 0.08 pour une table rigide, R peut valoir 0.02 pour 2 cm
-# def restitution_spin(vitesse_angulaire_ini, v_x, k, R=0.02):
-#     """
-#     Calcule la vitesse angulaire après impact selon la vitesse horizontale et le coefficient k.
-    
-#     Paramètres:
-#     -----------
-#     R : float
-#         Rayon de la balle (m)
-#     vitesse_angulaire_ini : float
-#         Vitesse angulaire avant impact (rad/s)
-#     v_x : float
-#         Vitesse horizontale de la balle avant impact (m/s)
-#     k : float
-#         Coefficient de conversion friction → rotation (adimensionnel)
-        
-#     Retour:
-#     -------
-#     vitesse_angulaire_fin : float
-#         Vitesse angulaire après impact (rad/s)
-#     """
-#     vitesse_angulaire_fin = vitesse_angulaire_ini + k * v_x / R
-#     return vitesse_angulaire_fin
-
-
-
-# # R = 0.02 m pour 2 cm
-# def nouvelle_vitesse_x(est_mousse, vx_i, vitesse_angulaire_ini, vx0, a, R=0.02, k=0.8):
-#     """
-#     Calcule la vitesse horizontale après rebond sur une table de ping-pong.
-
-#     Paramètres :
-#     - vx_i : vitesse horizontale initiale (m/s)
-#     - vitesse_angulaire_ini : vitesse angulaire initiale (rad/s)
-#     - R : rayon de la balle (m)
-#     - ex : coefficient de restitution tangentiel (≈ 0.8 pour une table)
-#     - k : facteur de conservation du spin (0.7-0.9 typique)
-
-#     Retourne :
-#     - vx_f : vitesse horizontale finale (m/s)
-#     """
-#     if est_mousse:
-#         vitesse_angulaire_fin = restitution_spin(vitesse_angulaire_ini, vx_i, 0.2)
-#         vx_f = R * vitesse_angulaire_fin - restitution_tangentielle(200, 0.35) * (vx_i - R * vitesse_angulaire_ini)
-#     else:
-#         vitesse_angulaire_fin = restitution_spin(vitesse_angulaire_ini, vx_i, 0.08)
-#         vx_f = R * vitesse_angulaire_fin - restitution_tangentielle(250, 0.22) * (vx_i - R * vitesse_angulaire_ini)
-#     return vx_f
-
-
-
 def adjust_spin_for_corner(angular_speed, ratio, is_left_corner=True):
     """
     Ajuste la vitesse angulaire selon le coin et le ratio.

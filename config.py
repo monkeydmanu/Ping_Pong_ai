@@ -38,6 +38,13 @@ GRAVITY = 9.81          # gravité (m/s²)
 RESTITUTION = 0.9       # perte d'énergie au rebond
 FPS = 120
 
+# --- Effet Magnus (balle de ping-pong) ---
+BALL_MASS = 0.0027          # masse de la balle (kg) — 2.7g
+BALL_REAL_RADIUS = 0.02     # rayon réel (m) — 20mm de diamètre = 40mm
+AIR_DENSITY = 1.2           # densité de l'air (kg/m³)
+MAGNUS_COEFFICIENT = 0.5    # coefficient de lift (Cl) — empirique, ajustable
+DRAG_COEFFICIENT = 0.4      # coefficient de traînée (Cd) — pour une sphère lisse
+
 # --- Constante de ping pong de vitesse utile --- 
 V_MAX_REEL = 120 # m/s
 VPX_FRAME_MAX = V_MAX_REEL * PIXELS_PER_METER / FPS
