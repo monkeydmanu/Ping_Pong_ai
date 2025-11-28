@@ -354,15 +354,29 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
             ball.vel[0] += vel_x * velocity_transfer
             ball.vel[1] += vel_y * velocity_transfer
             
-            # === GÉNÉRATION DE SPIN PAR LE MOUVEMENT TANGENTIEL ===
-            # Calculer la composante tangentielle de la vitesse de la raquette
-            # (mouvement parallèle à la surface = "brossage")
-            paddle_vel_tangent = vel_x * tangent[0] + vel_y * tangent[1]
+            # === GÉNÉRATION DE SPIN BASÉE SUR OÙ ON TAPE LA BALLE ===
+            # Vecteur du centre de la balle vers le point de contact
+            contact_offset_x = contact[0] - ball_center_x
+            contact_offset_y = contact[1] - ball_center_y
             
-            # Plus le mouvement tangentiel est fort, plus on génère de spin
-            # Le signe dépend de la direction du brossage
-            spin_generation = 0.08  # facteur de conversion tangent → spin
-            ball.angular_speed += paddle_vel_tangent * spin_generation
+            # Normaliser par le rayon pour avoir un ratio [-1, 1]
+            # contact_ratio_y > 0 = on tape en dessous de la balle (backspin/coupé)
+            # contact_ratio_y < 0 = on tape au dessus de la balle (topspin)
+            contact_ratio_y = contact_offset_y / ball.radius if ball.radius > 0 else 0
+            
+            # La vitesse horizontale de la raquette amplifie l'effet
+            # Plus on frappe fort horizontalement, plus l'effet est marqué
+            paddle_speed = np.sqrt(vel_x**2 + vel_y**2)
+            
+            # Générer le spin :
+            # - Taper dessus (contact_ratio_y < 0) + mouvement vers la droite (vel_x > 0) = topspin (positif)
+            # - Taper dessous (contact_ratio_y > 0) + mouvement vers la droite (vel_x > 0) = backspin (négatif)
+            # Le signe du spin dépend de : -contact_ratio_y * signe(vel_x)
+            spin_generation = 0.15  # facteur de conversion
+            direction_x = 1 if vel_x >= 0 else -1  # direction du coup
+            generated_spin = -contact_ratio_y * paddle_speed * spin_generation * direction_x
+            
+            ball.angular_speed += generated_spin
 
         # Ratio basé sur le spin (existant)
         max_spin = 500.0

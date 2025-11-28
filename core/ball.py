@@ -57,3 +57,27 @@ class Ball:
         
         # Décroissance naturelle du spin
         self.angular_speed *= (1 - 0.1 * dt)  # ~10% par seconde
+
+
+def spawn_ball_left(table):
+    """Crée une balle au bord gauche de la table."""
+    x_table, y_table, w_table, h_table = table.get_rect()
+    return Ball(
+        x=x_table + 30,  # Bord gauche de la table
+        y=y_table - 300,  # Au-dessus de la table
+        vx=0,
+        vy=0,
+        angular_speed=0
+    )
+
+
+def spawn_ball_right(table):
+    """Crée une balle au bord droit de la table."""
+    x_table, y_table, w_table, h_table = table.get_rect()
+    return Ball(
+        x=x_table + w_table - 30,  # Bord droit de la table
+        y=y_table - 300,  # Au-dessus de la table
+        vx=0,
+        vy=0,
+        angular_speed=0
+    )

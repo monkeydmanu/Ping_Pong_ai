@@ -3,7 +3,7 @@ Boucle principale du jeu et gestion des entités.
 """
 
 import pygame
-from core.ball import Ball
+from core.ball import Ball, spawn_ball_left, spawn_ball_right
 from config import WIDTH, HEIGHT, GREEN, FPS
 from graphics.renderer import draw_background, draw_table, draw_ball, draw_paddle, draw_net
 from core.paddle import Paddle
@@ -18,10 +18,13 @@ class Game:
         pygame.display.set_caption("Ping-Pong 2D - Niveau 1")
         self.clock = pygame.time.Clock()
         self.running = True
-        self.player = Paddle(50, HEIGHT//2 - 30)      # raquette gauche
-        self.opponent = Paddle(WIDTH - 60, HEIGHT//2 - 30)  # raquette droite
-        self.players = [self.player, self.opponent]
         self.net = Net()
+        net_center = WIDTH // 2  # Centre du filet
+        # Player à gauche: ne peut pas dépasser le centre du filet
+        self.player = Paddle(50, HEIGHT//2 - 30, x_min=0, x_max=net_center)
+        # Opponent à droite: ne peut pas aller avant le centre du filet
+        self.opponent = Paddle(WIDTH - 60, HEIGHT//2 - 30, x_min=net_center, x_max=WIDTH)
+        self.players = [self.player, self.opponent]
         self.table = Table()
         
         # Pour afficher la vitesse
@@ -31,17 +34,8 @@ class Game:
         self.last_paddle_vel = (0, 0)
         self.last_spin = 0
 
-        # Balles de test
-        x_table, y_table, w_table, h_table = self.table.get_rect()
-        self.balls = [
-            #Ball(x=20, y=y_table + h_table - 10, vx=200, vy=0, angular_speed=-300),
-            Ball(x=400, y=y_table - 300, vx=0, vy=0, angular_speed=0),
-            #Ball(x=x_table - 4, y=y_table - 200, vx=0, vy=-200, angular_speed=100),
-            #Ball(x=x_table - 9, y=y_table - 200, vx=0, vy=-200, angular_speed=100),              # coin gauche
-            #Ball(x=x_table - 5, y=y_table - 100, vx=0, vy=-150, angular_speed=-100),          # proche coin gauche
-            #Ball(x=x_table + w_table + 5, y=y_table - 150, vx=0, vy=-200, angular_speed=-100),   # coin droit
-            #Ball(x=x_table + w_table + 5, y=y_table - 120, vx=0, vy=-150, angular_speed=-100) # proche coin droit
-        ]
+        # Balles (vide au départ, appuyer sur R ou T pour lancer)
+        self.balls = []
 
     def run(self):
         """Boucle principale du jeu."""
@@ -57,14 +51,37 @@ class Game:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
+            # Gestion des touches pour spawn de balle (sur KEYDOWN pour éviter répétition)
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    self.spawn_ball_at_left()
+                elif event.key == pygame.K_t:
+                    self.spawn_ball_at_right()
 
         keys = pygame.key.get_pressed()
 
         # joueur 1
-        if keys[pygame.K_UP]:
+
+        if keys[pygame.K_o]:
             self.opponent.move_up()
-        if keys[pygame.K_DOWN]:
+        elif keys[pygame.K_l]:
             self.opponent.move_down()
+        else:
+            self.opponent.stop_vertical()
+
+        # Mouvement horizontal
+        if keys[pygame.K_k]:
+            self.opponent.move_left()
+        elif keys[pygame.K_m]:
+            self.opponent.move_right()
+        else:
+            self.opponent.stop_horizontal()
+
+        # Rotation
+        if keys[pygame.K_i]:
+            self.opponent.rotate_left(1)
+        if keys[pygame.K_p]:
+            self.opponent.rotate_right(1)
         
         # joueur 2
         # Mouvement vertical
@@ -89,6 +106,16 @@ class Game:
         if keys[pygame.K_e]:
             self.player.rotate_right(1)
 
+    def spawn_ball_at_left(self):
+        """Supprime la balle actuelle et en crée une au bord gauche."""
+        self.balls.clear()
+        self.balls.append(spawn_ball_left(self.table))
+
+    def spawn_ball_at_right(self):
+        """Supprime la balle actuelle et en crée une au bord droit."""
+        self.balls.clear()
+        self.balls.append(spawn_ball_right(self.table))
+
     def update(self):
         """Met à jour l'état du jeu (physique, logique)."""
         # Timer pour affichage debug toutes les 0.5s
@@ -107,8 +134,11 @@ class Game:
             # collisions
             check_table_collision(ball, self.table)
             check_ball_net(ball, self.net)
+            # collision avec les raquettes
+            for player in self.players:
+                check_ball_paddle(ball, player, self.screen)
+        
         for player in self.players:
-            check_ball_paddle(ball, player, self.screen)
             player.update(1.0/FPS)  # dt = 1/120 = 0.0083s par frame
 
     def draw(self):

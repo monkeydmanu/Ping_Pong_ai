@@ -8,7 +8,7 @@ import numpy as np
 from config import HEIGHT, WIDTH, RACKET_HEIGHT_PX, RACKET_WIDTH_PX, SPEED_RACKET
 
 class Paddle:
-    def __init__(self, x, y, width=RACKET_WIDTH_PX, height=RACKET_HEIGHT_PX, speed=SPEED_RACKET, max_speed=None):
+    def __init__(self, x, y, width=RACKET_WIDTH_PX, height=RACKET_HEIGHT_PX, speed=SPEED_RACKET, max_speed=None, x_min=0, x_max=WIDTH):
         self.pos = np.array([x, y], dtype=float)  # Position
         self.width = width
         self.height = height
@@ -18,6 +18,8 @@ class Paddle:
         self.angle = 0  # Rotation libre de la raquette
         self.acceleration = speed * 30  # Accélération très rapide (quasi instantanée)
         self.friction = 15  # Friction pour ralentir quand on lâche
+        self.x_min = x_min  # Limite gauche
+        self.x_max = x_max  # Limite droite
 
     # Mise à jour de la position selon la vélocité et le dt
     def update(self, dt):
@@ -36,12 +38,12 @@ class Paddle:
             self.pos[1] = HEIGHT - self.height
             self.vel[1] = 0
 
-        # Limite horizontale si nécessaire (optionnel)
-        if self.pos[0] < 0:
-            self.pos[0] = 0
+        # Limite horizontale avec x_min et x_max
+        if self.pos[0] < self.x_min:
+            self.pos[0] = self.x_min
             self.vel[0] = 0
-        if self.pos[0] + self.width > WIDTH:
-            self.pos[0] = WIDTH - self.width
+        if self.pos[0] + self.width > self.x_max:
+            self.pos[0] = self.x_max - self.width
             self.vel[0] = 0
 
     # Mouvement vertical avec accélération
