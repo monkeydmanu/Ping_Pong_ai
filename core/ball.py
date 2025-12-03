@@ -14,6 +14,12 @@ class Ball:
         self.angle = 90      # angle actuel pour l'affichage
         self.angular_speed = angular_speed      # rad/s
         self.collision_cooldown = 0  # frames restantes avant prochaine collision possible
+        
+        # Tracking des rebonds sur la table
+        self.bounces_left = 0   # Nombre de rebonds sur la moitié gauche
+        self.bounces_right = 0  # Nombre de rebonds sur la moitié droite
+        self.last_hit_by = None  # 'left' ou 'right' - qui a frappé en dernier
+        self.is_service = True   # True si c'est un service en cours
 
     def update(self):
         """Met à jour la position et la vitesse de la balle avec effet Magnus et traînée."""
@@ -60,24 +66,30 @@ class Ball:
 
 
 def spawn_ball_left(table):
-    """Crée une balle au bord gauche de la table."""
+    """Crée une balle au bord gauche de la table (service gauche)."""
     x_table, y_table, w_table, h_table = table.get_rect()
-    return Ball(
+    ball = Ball(
         x=x_table + 30,  # Bord gauche de la table
         y=y_table - 300,  # Au-dessus de la table
         vx=0,
         vy=0,
         angular_speed=0
     )
+    ball.is_service = True
+    ball.last_hit_by = 'left'  # Le serveur est à gauche
+    return ball
 
 
 def spawn_ball_right(table):
-    """Crée une balle au bord droit de la table."""
+    """Crée une balle au bord droit de la table (service droite)."""
     x_table, y_table, w_table, h_table = table.get_rect()
-    return Ball(
+    ball = Ball(
         x=x_table + w_table - 30,  # Bord droit de la table
         y=y_table - 300,  # Au-dessus de la table
         vx=0,
         vy=0,
         angular_speed=0
     )
+    ball.is_service = True
+    ball.last_hit_by = 'right'  # Le serveur est à droite
+    return ball

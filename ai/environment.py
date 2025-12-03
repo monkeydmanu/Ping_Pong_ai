@@ -79,6 +79,7 @@ class PingPongEnv(gym.Env):
         self.max_steps = 1000  # Timeout par épisode
         self.last_hit_by = None  # "agent" ou "opponent"
         self.ball_in_play = False
+        self.ball_side = None  # 'left' ou 'right' - côté actuel de la balle
         
     def reset(self, seed=None, options=None):
         """Réinitialise l'environnement pour un nouvel épisode."""
@@ -106,6 +107,7 @@ class PingPongEnv(gym.Env):
         self.ball_in_play = True
         self.steps = 0
         self.last_hit_by = None
+        self._last_hit_rewarded = False  # Reset le flag de récompense de frappe
         
         observation = self._get_observation()
         info = {}
@@ -139,14 +141,48 @@ class PingPongEnv(gym.Env):
         if self.ball_in_play:
             self.ball.update()
             
+            # Détecter le changement de côté de la balle
+            net_center = WIDTH // 2
+            current_side = 'left' if self.ball.pos[0] < net_center else 'right'
+            
+            # Si la balle change de côté
+            if self.ball_side is not None and current_side != self.ball_side:
+                # Vérifier service invalide
+                if self.ball.is_service:
+                    server_side = 'left' if self.agent_side == 'left' else 'right'
+                    if self.ball.last_hit_by == 'left' and self.ball_side == 'left' and self.ball.bounces_left == 0:
+                        # Service invalide - pas de rebond sur son côté
+                        pass  # Sera géré dans _compute_reward
+                    elif self.ball.last_hit_by == 'right' and self.ball_side == 'right' and self.ball.bounces_right == 0:
+                        pass
+                    else:
+                        self.ball.is_service = False
+                
+                # Reset les compteurs de rebonds et can_hit
+                self.agent_paddle.can_hit = True
+                self.opponent_paddle.can_hit = True
+                if self.ball_side == 'left':
+                    self.ball.bounces_left = 0
+                else:
+                    self.ball.bounces_right = 0
+            
+            self.ball_side = current_side
+            
             # Collisions
             check_table_collision(self.ball, self.table)
             check_ball_net(self.ball, self.net)
             
             # Collision avec raquette agent
+            old_can_hit_agent = self.agent_paddle.can_hit
             ball_hit_agent = self._check_paddle_collision(self.agent_paddle, "agent")
+            if old_can_hit_agent and not self.agent_paddle.can_hit:
+                self.ball.last_hit_by = 'left' if self.agent_side == 'left' else 'right'
+            
             # Collision avec raquette adversaire
+            old_can_hit_opp = self.opponent_paddle.can_hit
             ball_hit_opponent = self._check_paddle_collision(self.opponent_paddle, "opponent")
+            if old_can_hit_opp and not self.opponent_paddle.can_hit:
+                self.ball.last_hit_by = 'right' if self.agent_side == 'left' else 'left'
         
         # === Calculer la récompense ===
         reward, terminated = self._compute_reward()
@@ -251,56 +287,117 @@ class PingPongEnv(gym.Env):
         ball_x = self.ball.pos[0]
         ball_y = self.ball.pos[1]
         
-        # === Balle sortie du terrain ===
+        # Déterminer le côté de l'agent
+        agent_is_left = (self.agent_side == "left")
         
-        # Balle sortie par la gauche
-        if ball_x < 0:
-            if self.agent_side == "left":
+        # === Double rebond = faute ===
+        if self.ball.bounces_left >= 2:
+            # Point pour le joueur de droite
+            if agent_is_left:
+                reward = -10.0  # Agent perd
+            else:
+                reward = 10.0   # Agent gagne
+            terminated = True
+            self.ball_in_play = False
+        
+        elif self.ball.bounces_right >= 2:
+            # Point pour le joueur de gauche
+            if agent_is_left:
+                reward = 10.0   # Agent gagne
+            else:
+                reward = -10.0  # Agent perd
+            terminated = True
+            self.ball_in_play = False
+        
+        # === Balle sortie par la gauche ===
+        elif ball_x < 0:
+            if agent_is_left:
                 reward = -10.0  # Agent a perdu le point
             else:
                 reward = 10.0   # Agent a marqué
             terminated = True
             self.ball_in_play = False
         
-        # Balle sortie par la droite
+        # === Balle sortie par la droite ===
         elif ball_x > WIDTH:
-            if self.agent_side == "right":
+            if not agent_is_left:
                 reward = -10.0  # Agent a perdu le point
             else:
                 reward = 10.0   # Agent a marqué
             terminated = True
             self.ball_in_play = False
         
-        # Balle sortie par le bas (sous la table)
+        # === Balle sortie par le bas (sous la table) ===
         elif ball_y > HEIGHT:
             # Qui a fait la faute ?
-            if self.last_hit_by == "agent":
+            ball_last_hit_by_agent = (
+                (self.ball.last_hit_by == 'left' and agent_is_left) or
+                (self.ball.last_hit_by == 'right' and not agent_is_left)
+            )
+            if ball_last_hit_by_agent:
                 reward = -5.0  # Faute de l'agent
             else:
                 reward = 5.0   # Faute de l'adversaire
             terminated = True
             self.ball_in_play = False
         
+        # === Service invalide ===
+        elif self.ball.is_service:
+            # Vérifier si la balle a passé le filet sans rebondir sur le côté du serveur
+            net_center = WIDTH // 2
+            if self.ball.last_hit_by == 'left':
+                # Serveur à gauche, balle à droite sans rebond à gauche
+                if ball_x > net_center and self.ball.bounces_left == 0:
+                    if agent_is_left:
+                        reward = -10.0
+                    else:
+                        reward = 10.0
+                    terminated = True
+                    self.ball_in_play = False
+            elif self.ball.last_hit_by == 'right':
+                # Serveur à droite, balle à gauche sans rebond à droite
+                if ball_x < net_center and self.ball.bounces_right == 0:
+                    if not agent_is_left:
+                        reward = -10.0
+                    else:
+                        reward = 10.0
+                    terminated = True
+                    self.ball_in_play = False
+        
         # === Récompenses intermédiaires ===
-        else:
-            # Récompense pour avoir frappé la balle
-            if self.last_hit_by == "agent":
-                reward += 0.1
+        if not terminated:
+            # Déterminer si l'agent doit agir (balle de son côté ou qui arrive)
+            ball_on_agent_side = (ball_x < WIDTH // 2) if agent_is_left else (ball_x >= WIDTH // 2)
+            ball_coming_to_agent = (self.ball.vel[0] < 0) if agent_is_left else (self.ball.vel[0] > 0)
             
-            # Récompense pour se rapprocher de la balle
-            paddle_center = np.array([
-                self.agent_paddle.pos[0] + self.agent_paddle.width / 2,
-                self.agent_paddle.pos[1] + self.agent_paddle.height / 2
-            ])
-            ball_pos = np.array([ball_x, ball_y])
-            distance = np.linalg.norm(paddle_center - ball_pos)
+            # Récompense pour avoir frappé la balle (une seule fois par frappe)
+            ball_hit_by_agent = (
+                (self.ball.last_hit_by == 'left' and agent_is_left) or
+                (self.ball.last_hit_by == 'right' and not agent_is_left)
+            )
             
-            # Normaliser la distance
-            max_distance = np.sqrt(WIDTH**2 + HEIGHT**2)
-            normalized_distance = distance / max_distance
+            # Récompense significative quand l'agent TOUCHE la balle
+            if ball_hit_by_agent and not hasattr(self, '_last_hit_rewarded'):
+                reward += 1.0  # Récompense plus forte pour toucher
+                self._last_hit_rewarded = True
+            elif not ball_hit_by_agent:
+                self._last_hit_rewarded = False
             
-            # Petite récompense pour être proche de la balle
-            reward += 0.01 * (1.0 - normalized_distance)
+            # Récompense de proximité SEULEMENT si la balle est de son côté ou arrive
+            if ball_on_agent_side or ball_coming_to_agent:
+                paddle_center = np.array([
+                    self.agent_paddle.pos[0] + self.agent_paddle.width / 2,
+                    self.agent_paddle.pos[1] + self.agent_paddle.height / 2
+                ])
+                ball_pos = np.array([ball_x, ball_y])
+                distance = np.linalg.norm(paddle_center - ball_pos)
+                
+                # Normaliser la distance
+                max_distance = np.sqrt(WIDTH**2 + HEIGHT**2)
+                normalized_distance = distance / max_distance
+                
+                # Très petite récompense pour être proche (0.001 max par step)
+                reward += 0.001 * (1.0 - normalized_distance)
         
         return reward, terminated
     

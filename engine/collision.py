@@ -4,7 +4,7 @@ Fonctions de collision balle ↔ raquette / filet / table
 
 import pygame
 import numpy as np
-from config import RESTITUTION, TABLE_Y, VPX_FRAME_MAX
+from config import RESTITUTION, TABLE_Y, VPX_FRAME_MAX, WIDTH
 
 # a = 0.35 pour de la mousse et 0.22 pour la table
 # v0 = 200 m/s pour la mousse et 250 pour la table
@@ -372,7 +372,7 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
             # - Taper dessus (contact_ratio_y < 0) + mouvement vers la droite (vel_x > 0) = topspin (positif)
             # - Taper dessous (contact_ratio_y > 0) + mouvement vers la droite (vel_x > 0) = backspin (négatif)
             # Le signe du spin dépend de : -contact_ratio_y * signe(vel_x)
-            spin_generation = 0.15  # facteur de conversion
+            spin_generation = 0.2  # facteur de conversion
             direction_x = 1 if vel_x >= 0 else -1  # direction du coup
             generated_spin = -contact_ratio_y * paddle_speed * spin_generation * direction_x
             
@@ -395,12 +395,41 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
 
 
 def check_table_collision(ball, table):
+    """Vérifie la collision avec la table et track les rebonds."""
+    from config import WIDTH
+    
+    # Sauvegarder la vitesse Y avant collision
+    old_vel_y = ball.vel[1]
+    old_pos_y = ball.pos[1]
+    
     check_rect_collision(ball, table, est_mousse=False, est_table=True, a=0.22)
+    
+    # Si la balle allait vers le bas et maintenant va vers le haut = rebond
+    if old_vel_y > 0 and ball.vel[1] < 0:
+        net_center = WIDTH // 2
+        if ball.pos[0] < net_center:
+            ball.bounces_left += 1
+        else:
+            ball.bounces_right += 1
+        return True
+    
+    return False
 
 
 
 def check_ball_paddle(ball, paddle, screen):
+    # Vérifier si la raquette peut toucher la balle
+    if not paddle.can_hit:
+        return
+    
+    # Sauvegarder la position avant collision pour détecter si collision a eu lieu
+    old_pos = ball.pos.copy()
+    
     check_rect_collision(ball, paddle, est_mousse=True, est_table=False, a=0.35, screen=screen)
+    
+    # Si la position a changé, une collision a eu lieu
+    if not np.array_equal(old_pos, ball.pos):
+        paddle.can_hit = False  # La raquette ne peut plus toucher la balle
 
 def check_ball_net(ball, net, restitution=RESTITUTION, spin_factor=0.3, spin_damping=0.8):
     """

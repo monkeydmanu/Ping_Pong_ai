@@ -1,66 +1,91 @@
 """
-Configuration du réseau de neurones pour PPO.
-Architectures personnalisées si besoin.
+Réseaux de neurones pour PPO (Acteur-Critique).
+Adapté pour actions continues avec distribution Gaussienne.
 """
 
-import torch
+import os
+import torch as T
 import torch.nn as nn
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from gymnasium import spaces
+import torch.optim as optim
 
 
-class PingPongFeatureExtractor(BaseFeaturesExtractor):
+class ActorNetwork(nn.Module):
     """
-    Extracteur de features personnalisé pour le Ping-Pong.
-    
-    Architecture:
-        Input (12) -> FC(256) -> ReLU -> FC(256) -> ReLU -> FC(128) -> ReLU -> Output
+    Réseau Acteur pour actions continues.
+    Produit la moyenne (mu) des actions, sigma est appris séparément.
     """
-    
-    def __init__(self, observation_space: spaces.Box, features_dim: int = 128):
-        super().__init__(observation_space, features_dim)
+    def __init__(self, n_actions, input_dims, alpha,
+            fc1_dims=256, fc2_dims=256, chkpt_dir='models/ppo'):
+        super(ActorNetwork, self).__init__()
+
+        self.checkpoint_file = os.path.join(chkpt_dir, 'actor_torch_ppo')
         
-        n_input = observation_space.shape[0]
-        
-        self.network = nn.Sequential(
-            nn.Linear(n_input, 256),
+        # Réseau pour la moyenne des actions
+        self.actor = nn.Sequential(
+            nn.Linear(input_dims, fc1_dims),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(fc1_dims, fc2_dims),
             nn.ReLU(),
-            nn.Linear(256, features_dim),
-            nn.ReLU()
+            nn.Linear(fc2_dims, n_actions),
+            nn.Tanh()  # Sortie entre [-1, 1] pour actions continues
         )
-    
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        return self.network(observations)
+        
+        # Log de l'écart-type (appris)
+        # Initialisé à 0 -> sigma = exp(0) = 1
+        self.log_std = nn.Parameter(T.zeros(n_actions))
+
+        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
+        self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
+        self.to(self.device)
+
+    def forward(self, state):
+        """
+        Retourne la moyenne et l'écart-type de la distribution.
+        """
+        mu = self.actor(state)
+        # Clamp log_std pour éviter des valeurs extrêmes
+        log_std = T.clamp(self.log_std, -20, 2)
+        std = log_std.exp().expand_as(mu)
+        
+        return mu, std
+
+    def save_checkpoint(self):
+        os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
+        T.save(self.state_dict(), self.checkpoint_file)
+
+    def load_checkpoint(self):
+        self.load_state_dict(T.load(self.checkpoint_file, map_location=self.device))
 
 
-# Configuration des policy_kwargs pour utiliser l'extracteur personnalisé
-CUSTOM_POLICY_KWARGS = {
-    "features_extractor_class": PingPongFeatureExtractor,
-    "features_extractor_kwargs": {"features_dim": 128},
-    "net_arch": {
-        "pi": [64, 64],  # Réseau de la politique (acteur)
-        "vf": [64, 64]   # Réseau de valeur (critique)
-    }
-}
-
-# Configuration standard (plus simple, souvent suffisante)
-STANDARD_POLICY_KWARGS = {
-    "net_arch": [256, 256]  # 2 couches cachées de 256 neurones
-}
-
-
-def get_policy_kwargs(use_custom=False):
+class CriticNetwork(nn.Module):
     """
-    Retourne les kwargs de politique à utiliser.
-    
-    Args:
-        use_custom: Si True, utilise l'architecture personnalisée
-    
-    Returns:
-        dict: Arguments pour la politique PPO
+    Réseau Critique - estime la valeur V(s).
     """
-    if use_custom:
-        return CUSTOM_POLICY_KWARGS
-    return STANDARD_POLICY_KWARGS
+    def __init__(self, input_dims, alpha, fc1_dims=256, fc2_dims=256,
+            chkpt_dir='models/ppo'):
+        super(CriticNetwork, self).__init__()
+
+        self.checkpoint_file = os.path.join(chkpt_dir, 'critic_torch_ppo')
+        
+        self.critic = nn.Sequential(
+            nn.Linear(input_dims, fc1_dims),
+            nn.ReLU(),
+            nn.Linear(fc1_dims, fc2_dims),
+            nn.ReLU(),
+            nn.Linear(fc2_dims, 1)
+        )
+
+        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
+        self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
+        self.to(self.device)
+
+    def forward(self, state):
+        value = self.critic(state)
+        return value
+
+    def save_checkpoint(self):
+        os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
+        T.save(self.state_dict(), self.checkpoint_file)
+
+    def load_checkpoint(self):
+        self.load_state_dict(T.load(self.checkpoint_file, map_location=self.device))

@@ -20,6 +20,7 @@ class Paddle:
         self.friction = 15  # Friction pour ralentir quand on lâche
         self.x_min = x_min  # Limite gauche
         self.x_max = x_max  # Limite droite
+        self.can_hit = True  # Booléen pour savoir si la raquette peut toucher la balle
 
     # Mise à jour de la position selon la vélocité et le dt
     def update(self, dt):

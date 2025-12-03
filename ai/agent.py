@@ -1,197 +1,155 @@
 """
 Agent PPO pour le Ping-Pong.
-Utilise Stable-Baselines3 pour l'entraînement.
+Implémentation from scratch avec PyTorch (style Phil's code).
+Adapté pour actions continues.
 """
 
 import os
-from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+import numpy as np
+import torch as T
+from torch.distributions import Normal
 
-from ai.environment import PingPongEnv
+from ai.model import ActorNetwork, CriticNetwork
+from ai.memory import PPOMemory
 
 
-class PingPongAgent:
+class Agent:
     """
-    Agent PPO pour jouer au Ping-Pong.
+    Agent PPO pour actions continues.
     """
-    
-    def __init__(self, model_path=None):
+    def __init__(self, n_actions, input_dims, gamma=0.99, alpha=0.0003, 
+                 gae_lambda=0.95, policy_clip=0.2, batch_size=64, n_epochs=10,
+                 chkpt_dir='models/ppo'):
+        self.gamma = gamma
+        self.policy_clip = policy_clip
+        self.n_epochs = n_epochs
+        self.gae_lambda = gae_lambda
+        self.n_actions = n_actions
+
+        self.actor = ActorNetwork(n_actions, input_dims, alpha, chkpt_dir=chkpt_dir)
+        self.critic = CriticNetwork(input_dims, alpha, chkpt_dir=chkpt_dir)
+        self.memory = PPOMemory(batch_size)
+       
+    def remember(self, state, action, probs, vals, reward, done):
+        self.memory.store_memory(state, action, probs, vals, reward, done)
+
+    def save_models(self):
+        print('... saving models ...')
+        self.actor.save_checkpoint()
+        self.critic.save_checkpoint()
+
+    def load_models(self):
+        print('... loading models ...')
+        self.actor.load_checkpoint()
+        self.critic.load_checkpoint()
+
+    def choose_action(self, observation):
         """
-        Initialise l'agent.
-        
-        Args:
-            model_path: Chemin vers un modèle pré-entraîné (optionnel)
-        """
-        self.model = None
-        self.env = None
-        
-        if model_path and os.path.exists(model_path):
-            self.load(model_path)
-    
-    def create_model(self, env, **kwargs):
-        """
-        Crée un nouveau modèle PPO.
-        
-        Args:
-            env: Environnement Gymnasium
-            **kwargs: Arguments supplémentaires pour PPO
-        """
-        default_params = {
-            "policy": "MlpPolicy",
-            "learning_rate": 3e-4,
-            "n_steps": 2048,
-            "batch_size": 64,
-            "n_epochs": 10,
-            "gamma": 0.99,           # Facteur de discount
-            "gae_lambda": 0.95,      # GAE lambda
-            "clip_range": 0.2,       # Clipping PPO
-            "ent_coef": 0.01,        # Coefficient d'entropie (exploration)
-            "verbose": 1,
-            "tensorboard_log": "./tensorboard_logs/"
-        }
-        
-        # Fusionner avec les paramètres personnalisés
-        default_params.update(kwargs)
-        
-        self.model = PPO(env=env, **default_params)
-        self.env = env
-        
-        return self.model
-    
-    def train(self, total_timesteps=100000, save_path="models/ppo_pingpong", 
-              save_freq=10000, eval_freq=5000):
-        """
-        Entraîne l'agent.
-        
-        Args:
-            total_timesteps: Nombre total de steps d'entraînement
-            save_path: Chemin pour sauvegarder les checkpoints
-            save_freq: Fréquence de sauvegarde (en steps)
-            eval_freq: Fréquence d'évaluation (en steps)
-        """
-        if self.model is None:
-            raise ValueError("Modèle non initialisé. Appelez create_model() d'abord.")
-        
-        # Créer le dossier de sauvegarde
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        
-        # Callback pour sauvegarder régulièrement
-        checkpoint_callback = CheckpointCallback(
-            save_freq=save_freq,
-            save_path=os.path.dirname(save_path),
-            name_prefix="ppo_pingpong"
-        )
-        
-        # Entraînement
-        self.model.learn(
-            total_timesteps=total_timesteps,
-            callback=checkpoint_callback,
-            progress_bar=True
-        )
-        
-        # Sauvegarder le modèle final
-        self.model.save(save_path)
-        print(f"Modèle sauvegardé: {save_path}")
-    
-    def predict(self, observation, deterministic=True):
-        """
-        Prédit une action à partir d'une observation.
-        
-        Args:
-            observation: Observation de l'environnement
-            deterministic: Si True, utilise la politique déterministe
+        Choisit une action à partir de l'observation.
         
         Returns:
-            action: Action à effectuer
+            action: np.array de shape (n_actions,)
+            log_prob: log probabilité de l'action (somme sur toutes les dimensions)
+            value: valeur estimée de l'état
         """
-        if self.model is None:
-            raise ValueError("Modèle non chargé.")
+        state = T.tensor([observation], dtype=T.float).to(self.actor.device)
+
+        mu, std = self.actor(state)
+        value = self.critic(state)
         
-        action, _ = self.model.predict(observation, deterministic=deterministic)
-        return action
-    
-    def load(self, model_path):
-        """
-        Charge un modèle pré-entraîné.
+        # Distribution normale pour chaque action
+        dist = Normal(mu, std)
+        action = dist.sample()
         
-        Args:
-            model_path: Chemin vers le modèle
-        """
-        self.model = PPO.load(model_path)
-        print(f"Modèle chargé: {model_path}")
-    
-    def save(self, model_path):
-        """
-        Sauvegarde le modèle actuel.
+        # Log prob = somme des log probs de chaque dimension
+        log_prob = dist.log_prob(action).sum(dim=-1)
         
-        Args:
-            model_path: Chemin de sauvegarde
-        """
-        if self.model is None:
-            raise ValueError("Aucun modèle à sauvegarder.")
-        
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        self.model.save(model_path)
-        print(f"Modèle sauvegardé: {model_path}")
+        # Champ action entre [-1, 1]
+        action = T.clamp(action, -1.0, 1.0)
+
+        action = action.squeeze().cpu().detach().numpy()
+        log_prob = log_prob.squeeze().item()
+        value = value.squeeze().item()
+
+        return action, log_prob, value
+
+    def learn(self):
+        for _ in range(self.n_epochs):
+            state_arr, action_arr, old_prob_arr, vals_arr,\
+            reward_arr, dones_arr, batches = \
+                    self.memory.generate_batches()
+
+            values = vals_arr
+            advantage = np.zeros(len(reward_arr), dtype=np.float32)
+
+            # Calcul GAE (Generalized Advantage Estimation)
+            for t in range(len(reward_arr)-1):
+                discount = 1
+                a_t = 0
+                for k in range(t, len(reward_arr)-1):
+                    a_t += discount * (reward_arr[k] + self.gamma * values[k+1] *\
+                            (1 - int(dones_arr[k])) - values[k])
+                    discount *= self.gamma * self.gae_lambda
+                advantage[t] = a_t
+            
+            advantage = T.tensor(advantage).to(self.actor.device)
+            values = T.tensor(values).to(self.actor.device)
+            
+            for batch in batches:
+                states = T.tensor(state_arr[batch], dtype=T.float).to(self.actor.device)
+                old_probs = T.tensor(old_prob_arr[batch]).to(self.actor.device)
+                actions = T.tensor(action_arr[batch], dtype=T.float).to(self.actor.device)
+
+                # Forward pass
+                mu, std = self.actor(states)
+                critic_value = self.critic(states)
+                critic_value = T.squeeze(critic_value)
+
+                # Calculer les nouvelles log probs
+                dist = Normal(mu, std)
+                new_probs = dist.log_prob(actions).sum(dim=-1)
+                
+                # Ratio pour PPO
+                prob_ratio = (new_probs - old_probs).exp()
+                
+                # Loss acteur (PPO clipped)
+                weighted_probs = advantage[batch] * prob_ratio
+                weighted_clipped_probs = T.clamp(prob_ratio, 
+                                                  1 - self.policy_clip,
+                                                  1 + self.policy_clip) * advantage[batch]
+                actor_loss = -T.min(weighted_probs, weighted_clipped_probs).mean()
+
+                # Loss critique (MSE)
+                returns = advantage[batch] + values[batch]
+                critic_loss = (returns - critic_value) ** 2
+                critic_loss = critic_loss.mean()
+
+                # Loss totale
+                total_loss = actor_loss + 0.5 * critic_loss
+                
+                # Backpropagation
+                self.actor.optimizer.zero_grad()
+                self.critic.optimizer.zero_grad()
+                total_loss.backward()
+                self.actor.optimizer.step()
+                self.critic.optimizer.step()
+
+        self.memory.clear_memory()
 
 
-def train_agent(total_timesteps=100000, n_envs=4, render=False):
+def predict_action(agent, observation, deterministic=False):
     """
-    Fonction utilitaire pour entraîner un agent.
-    
-    Args:
-        total_timesteps: Nombre de steps d'entraînement
-        n_envs: Nombre d'environnements parallèles
-        render: Si True, affiche le jeu pendant l'entraînement
+    Prédit une action pour le jeu (sans exploration si deterministic).
     """
-    # Créer des environnements parallèles pour accélérer l'entraînement
-    def make_env():
-        return PingPongEnv(render_mode="human" if render else None)
+    state = T.tensor([observation], dtype=T.float).to(agent.actor.device)
     
-    if n_envs > 1:
-        env = make_vec_env(make_env, n_envs=n_envs)
+    mu, std = agent.actor(state)
+    
+    if deterministic:
+        action = mu
     else:
-        env = DummyVecEnv([make_env])
+        dist = Normal(mu, std)
+        action = dist.sample()
     
-    # Créer et entraîner l'agent
-    agent = PingPongAgent()
-    agent.create_model(env)
-    agent.train(total_timesteps=total_timesteps)
-    
-    env.close()
-    return agent
-
-
-def play_with_agent(model_path, num_episodes=5):
-    """
-    Joue avec un agent entraîné (pour visualiser).
-    
-    Args:
-        model_path: Chemin vers le modèle
-        num_episodes: Nombre d'épisodes à jouer
-    """
-    env = PingPongEnv(render_mode="human")
-    agent = PingPongAgent(model_path)
-    
-    for episode in range(num_episodes):
-        obs, _ = env.reset()
-        total_reward = 0
-        done = False
-        
-        while not done:
-            action = agent.predict(obs)
-            obs, reward, terminated, truncated, info = env.step(action)
-            total_reward += reward
-            done = terminated or truncated
-        
-        print(f"Episode {episode + 1}: Reward = {total_reward:.2f}")
-    
-    env.close()
-
-
-# Point d'entrée pour l'entraînement
-if __name__ == "__main__":
-    print("=== Entraînement de l'agent PPO ===")
-    agent = train_agent(total_timesteps=50000, n_envs=1, render=True)
+    action = T.clamp(action, -1.0, 1.0)
+    return action.squeeze().cpu().detach().numpy()
