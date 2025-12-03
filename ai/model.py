@@ -51,10 +51,16 @@ class ActorNetwork(nn.Module):
 
     def save_checkpoint(self):
         os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
-        T.save(self.state_dict(), self.checkpoint_file)
+        T.save({
+            'model_state_dict': self.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict()
+        }, self.checkpoint_file)
 
     def load_checkpoint(self):
-        self.load_state_dict(T.load(self.checkpoint_file, map_location=self.device))
+        checkpoint = T.load(self.checkpoint_file, map_location=self.device)
+        self.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print(f'    Actor chargé depuis {self.checkpoint_file}')
 
 
 class CriticNetwork(nn.Module):
@@ -85,7 +91,13 @@ class CriticNetwork(nn.Module):
 
     def save_checkpoint(self):
         os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
-        T.save(self.state_dict(), self.checkpoint_file)
+        T.save({
+            'model_state_dict': self.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict()
+        }, self.checkpoint_file)
 
     def load_checkpoint(self):
-        self.load_state_dict(T.load(self.checkpoint_file, map_location=self.device))
+        checkpoint = T.load(self.checkpoint_file, map_location=self.device)
+        self.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print(f'    Critic chargé depuis {self.checkpoint_file}')
