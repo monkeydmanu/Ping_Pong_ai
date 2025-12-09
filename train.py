@@ -124,7 +124,7 @@ def update_live_plot(fig, ax1, ax2, scores, update_freq=10):
     fig.canvas.flush_events()
 
 
-def train(n_games=1000, N=256, batch_size=5, n_epochs=4, alpha=0.0003, 
+def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003, 
           render=False, save_best=True, live_plot=True, plot_first_episode=True,
           resume=False, model_path='models/ppo'):
     """
@@ -326,6 +326,8 @@ if __name__ == "__main__":
                         help='Nombre d\'épisodes pour l\'entraînement')
     parser.add_argument('--render', action='store_true',
                         help='Afficher le jeu pendant l\'entraînement')
+    parser.add_argument('--render_plot', action='store_true',
+                        help='Afficher les graphiques en temps réel')
     parser.add_argument('--resume', action='store_true',
                         help='Reprendre l\'entraînement depuis le dernier modèle sauvegardé')
     parser.add_argument('--model_path', type=str, default='models/ppo',
@@ -334,7 +336,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.mode == 'train':
-        train(n_games=args.episodes, render=args.render, 
-              resume=True, model_path=args.model_path)  # Toujours charger le modèle s'il existe
+        train(n_games=args.episodes, render=args.render, live_plot=args.render_plot,
+              resume=args.resume, model_path=args.model_path)
     else:
         play(model_path=args.model_path, num_episodes=5)

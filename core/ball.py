@@ -21,13 +21,15 @@ class Ball:
         self.last_hit_by = None  # 'left' ou 'right' - qui a frappé en dernier
         self.is_service = True   # True si c'est un service en cours
 
-    def update(self):
+    def update(self, dt=None):
         """Met à jour la position et la vitesse de la balle avec effet Magnus et traînée."""
-        dt = 1.0 / FPS  # Temps réel par frame (1/120 = 0.0083s)
+        if dt is None:
+            dt = 1.0 / FPS  # Temps réel par frame (1/120 = 0.0083s)
         
-        # Décrémenter le cooldown de collision
+        # Décrémenter le cooldown de collision (en fonction du temps)
         if self.collision_cooldown > 0:
-            self.collision_cooldown -= 1
+            # On décrémente de 1 par frame "standard" (1/FPS)
+            self.collision_cooldown -= dt * FPS
         
         # Vitesse en pixels/s pour calculer la norme
         speed_px = np.linalg.norm(self.vel)

@@ -10,7 +10,7 @@ import pygame
 
 from config import (
     WIDTH, HEIGHT, FPS, TABLE_Y, PIXELS_PER_METER,
-    RACKET_WIDTH_PX, RACKET_HEIGHT_PX
+    RACKET_WIDTH_PX, RACKET_HEIGHT_PX, TABLE_WIDTH_PX
 )
 from core.ball import Ball, spawn_ball_left, spawn_ball_right
 from core.paddle import Paddle
@@ -82,8 +82,14 @@ class PingPongEnv(gym.Env):
         self.ball_side = None  # 'left' ou 'right' - côté actuel de la balle
         
         # Flags pour les récompenses (éviter les doublons)
-        self._last_hit_count = 0
-        self._bounce_rewarded_step = -100
+        self.bounce_reward_given = False
+        self.fault_volley = False
+        self.double_hit_fault = False
+        self.agent_already_hit = False
+        self.service_fault = False
+        self.pending_hit_reward = False
+        self.ball_out_result = None  # 'win' ou 'loss'
+        
         
     def reset(self, seed=None, options=None):
         """Réinitialise l'environnement pour un nouvel épisode."""
@@ -102,11 +108,23 @@ class PingPongEnv(gym.Env):
             self.agent_paddle = Paddle(WIDTH - 60, HEIGHT // 2 - 30, x_min=net_center, x_max=WIDTH)
             self.opponent_paddle = Paddle(50, HEIGHT // 2 - 30, x_min=0, x_max=net_center)
         
-        # Spawn la balle du côté de l'agent (il sert)
-        if self.agent_side == "left":
-            self.ball = spawn_ball_left(self.table)
+        # Randomiser le service (50% chance que l'agent serve)
+        # Pour l'entraînement, on force l'agent à servir tout le temps
+        is_agent_service = True
+        # is_agent_service = np.random.choice([True, False])
+        
+        if is_agent_service:
+            # L'agent sert
+            if self.agent_side == "left":
+                self.ball = spawn_ball_left(self.table)
+            else:
+                self.ball = spawn_ball_right(self.table)
         else:
-            self.ball = spawn_ball_right(self.table)
+            # L'adversaire sert
+            if self.agent_side == "left":
+                self.ball = spawn_ball_right(self.table)
+            else:
+                self.ball = spawn_ball_left(self.table)
         
         self.ball_in_play = True
         self.steps = 0
@@ -114,20 +132,27 @@ class PingPongEnv(gym.Env):
         self.agent_hits = 0  # Compteur de frappes de l'agent
         
         # Reset des flags de récompenses
-        self._last_hit_count = 0
-        self._bounce_rewarded_step = -100
+        self.bounce_reward_given = False
+        self.fault_volley = False
+        self.double_hit_fault = False
+        self.agent_already_hit = False
+        self.service_fault = False
+        self.pending_hit_reward = False
+        self.ball_out_result = None
         
         observation = self._get_observation()
         info = {}
         
         return observation, info
     
-    def step(self, action):
+    def step(self, action, opponent_action=None):
         """
         Exécute une action et retourne le nouvel état.
         
         Args:
-            action: np.array de shape (3,) avec [move_x, move_y, rotate]
+            action: Action de l'agent principal
+            opponent_action: (Optionnel) Action de l'adversaire. 
+                             Si None, utilise l'IA interne _get_opponent_action().
         
         Returns:
             observation, reward, terminated, truncated, info
@@ -137,9 +162,15 @@ class PingPongEnv(gym.Env):
         # === Appliquer l'action de l'agent ===
         self._apply_action(self.agent_paddle, action)
         
-        # === Appliquer l'action de l'adversaire (IA simple pour commencer) ===
-        opponent_action = self._get_opponent_action()
-        self._apply_action(self.opponent_paddle, opponent_action)
+        # === Appliquer l'action de l'adversaire ===
+        if opponent_action is None:
+            # IA simple par défaut
+            actual_opponent_action = self._get_opponent_action()
+        else:
+            # Action fournie (pour le self-play ou 2ème agent)
+            actual_opponent_action = opponent_action
+            
+        self._apply_action(self.opponent_paddle, actual_opponent_action)
         
         # === Mettre à jour la physique ===
         dt = 1.0 / FPS
@@ -147,51 +178,142 @@ class PingPongEnv(gym.Env):
         self.opponent_paddle.update(dt)
         
         if self.ball_in_play:
-            self.ball.update()
+            # Sub-stepping pour éviter le tunneling (balle qui traverse la raquette)
+            n_substeps = 4
+            dt_sub = dt / n_substeps
             
-            # Détecter le changement de côté de la balle
-            net_center = WIDTH // 2
-            current_side = 'left' if self.ball.pos[0] < net_center else 'right'
-            
-            # Si la balle change de côté
-            if self.ball_side is not None and current_side != self.ball_side:
-                # Vérifier service invalide
-                if self.ball.is_service:
-                    server_side = 'left' if self.agent_side == 'left' else 'right'
-                    if self.ball.last_hit_by == 'left' and self.ball_side == 'left' and self.ball.bounces_left == 0:
-                        # Service invalide - pas de rebond sur son côté
-                        pass  # Sera géré dans _compute_reward
-                    elif self.ball.last_hit_by == 'right' and self.ball_side == 'right' and self.ball.bounces_right == 0:
-                        pass
-                    else:
-                        self.ball.is_service = False
+            for _ in range(n_substeps):
+                self.ball.update(dt=dt_sub)
                 
-                # Reset les compteurs de rebonds et can_hit
-                self.agent_paddle.can_hit = True
-                self.opponent_paddle.can_hit = True
-                if self.ball_side == 'left':
-                    self.ball.bounces_left = 0
-                else:
-                    self.ball.bounces_right = 0
-            
-            self.ball_side = current_side
-            
-            # Collisions
-            check_table_collision(self.ball, self.table)
-            check_ball_net(self.ball, self.net)
-            
-            # Collision avec raquette agent
-            old_can_hit_agent = self.agent_paddle.can_hit
-            ball_hit_agent = self._check_paddle_collision(self.agent_paddle, "agent")
-            if old_can_hit_agent and not self.agent_paddle.can_hit:
-                self.ball.last_hit_by = 'left' if self.agent_side == 'left' else 'right'
-                self.agent_hits += 1  # L'agent a vraiment touché la balle !
-            
-            # Collision avec raquette adversaire
-            old_can_hit_opp = self.opponent_paddle.can_hit
-            ball_hit_opponent = self._check_paddle_collision(self.opponent_paddle, "opponent")
-            if old_can_hit_opp and not self.opponent_paddle.can_hit:
-                self.ball.last_hit_by = 'right' if self.agent_side == 'left' else 'left'
+                # === DETECTION BALLE OUT (Table + Marge) ===
+                # Si la balle sort des limites latérales, le point est terminé immédiatement.
+                if self.ball_out_result is None:
+                    margin = 10
+                    table_left_limit = self.table.x - margin
+                    table_right_limit = self.table.x + self.table.width + margin
+                    
+                    # Sortie à gauche
+                    if self.ball.pos[0] < table_left_limit:
+                        if self.ball.bounces_left == 0:
+                            # Sortie sans rebond à gauche -> Faute du tireur (celui qui a envoyé vers la gauche)
+                            # Si agent est à gauche, c'est l'adversaire qui a tiré -> WIN
+                            if self.agent_side == 'left':
+                                self.ball_out_result = 'win'
+                            else:
+                                self.ball_out_result = 'loss'
+                        else:
+                            # Rebond valide, mais balle sort -> Le receveur (gauche) a raté -> LOSS pour gauche
+                            if self.agent_side == 'left':
+                                self.ball_out_result = 'loss'
+                            else:
+                                self.ball_out_result = 'win'
+                                
+                    # Sortie à droite
+                    elif self.ball.pos[0] > table_right_limit:
+                        if self.ball.bounces_right == 0:
+                            # Sortie sans rebond à droite -> Faute du tireur
+                            if self.agent_side == 'left':
+                                self.ball_out_result = 'loss' # Agent a tiré trop loin
+                            else:
+                                self.ball_out_result = 'win' # Adversaire a tiré trop loin
+                        else:
+                            # Rebond valide, balle sort -> Receveur (droite) a raté -> LOSS pour droite
+                            if self.agent_side == 'left':
+                                self.ball_out_result = 'win'
+                            else:
+                                self.ball_out_result = 'loss'
+                
+                # Si le point est terminé par un OUT, on arrête la physique/collisions
+                if self.ball_out_result is not None:
+                    continue
+
+                # Détecter le changement de côté de la balle
+                net_center = WIDTH // 2
+                current_side = 'left' if self.ball.pos[0] < net_center else 'right'
+                
+                # Si la balle change de côté
+                if self.ball_side is not None and current_side != self.ball_side:
+                    # Vérifier service invalide (balle traverse le filet sans avoir rebondi chez le serveur)
+                    if self.ball.is_service:
+                        # Qui a servi ? (celui qui a touché la balle en dernier)
+                        server = self.ball.last_hit_by
+                        
+                        # Est-ce une faute ? (n'a pas rebondi du côté du serveur avant de passer)
+                        is_fault = False
+                        if server == 'left' and self.ball_side == 'left' and self.ball.bounces_left == 0:
+                            is_fault = True
+                        elif server == 'right' and self.ball_side == 'right' and self.ball.bounces_right == 0:
+                            is_fault = True
+                            
+                        if is_fault:
+                            # Si c'est l'agent qui a fait la faute
+                            if (server == 'left' and self.agent_side == 'left') or \
+                               (server == 'right' and self.agent_side == 'right'):
+                                self.service_fault = True
+                            # Sinon c'est l'adversaire (on pourrait lui donner une pénalité ou donner le point à l'agent)
+                        else:
+                            # Service réussi, le jeu continue normalement
+                            self.ball.is_service = False
+                    
+                    # Reset les compteurs de rebonds et can_hit
+                    self.agent_paddle.can_hit = True
+                    self.opponent_paddle.can_hit = True
+                    
+                    # Reset du flag de double touche quand la balle change de côté
+                    if current_side != self.agent_side:
+                        self.agent_already_hit = False
+                        
+                    if self.ball_side == 'left':
+                        self.ball.bounces_left = 0
+                    else:
+                        self.ball.bounces_right = 0
+                
+                self.ball_side = current_side
+                
+                # Collisions
+                check_table_collision(self.ball, self.table)
+                check_ball_net(self.ball, self.net)
+                
+                # Collision avec raquette agent
+                old_can_hit_agent = self.agent_paddle.can_hit
+                ball_hit_agent = self._check_paddle_collision(self.agent_paddle, "agent")
+                
+                # Si on touche la balle
+                if ball_hit_agent:
+                    # Reset du flag de récompense de rebond pour le nouveau coup
+                    self.bounce_reward_given = False
+                    
+                    # Vérifier si on a déjà touché la balle sans qu'elle change de côté
+                    if self.agent_already_hit:
+                        self.double_hit_fault = True
+                    else:
+                        self.agent_already_hit = True
+                        self.pending_hit_reward = True
+                        self.agent_hits += 1
+                        self.ball.last_hit_by = 'left' if self.agent_side == 'left' else 'right'
+                        
+                        # === DETECTION VOLLEY (OBSTRUCTION) ===
+                        # Si la balle vient de l'adversaire et qu'on la touche avant qu'elle rebondisse
+                        opponent_side = 'right' if self.agent_side == 'left' else 'left'
+                        
+                        # On vérifie seulement si c'est l'adversaire qui a frappé en dernier
+                        if self.ball.last_hit_by == opponent_side:
+                            is_volley = False
+                            if self.agent_side == 'left':
+                                if self.ball.bounces_left == 0:
+                                    is_volley = True
+                            else:
+                                if self.ball.bounces_right == 0:
+                                    is_volley = True
+                            
+                            if is_volley:
+                                self.fault_volley = True
+                
+                # Collision avec raquette adversaire
+                old_can_hit_opp = self.opponent_paddle.can_hit
+                ball_hit_opponent = self._check_paddle_collision(self.opponent_paddle, "opponent")
+                if ball_hit_opponent:
+                    self.ball.last_hit_by = 'right' if self.agent_side == 'left' else 'left'
         
         # === Calculer la récompense ===
         reward, terminated = self._compute_reward()
@@ -310,6 +432,39 @@ class PingPongEnv(gym.Env):
         
         # === RÉCOMPENSES TERMINALES (fin d'épisode) ===
         
+        # Faute de double touche
+        if self.double_hit_fault:
+            reward = -10.0  # Faute directe
+            terminated = True
+            self.ball_in_play = False
+            return reward, terminated
+
+        # Faute de volée (Obstruction)
+        if self.fault_volley:
+            reward = -10.0  # Faute directe
+            terminated = True
+            self.ball_in_play = False
+            return reward, terminated
+            
+        # Balle sortie (détectée dans step)
+        if self.ball_out_result == 'win':
+            reward = 20.0   # Victoire !
+            terminated = True
+            self.ball_in_play = False
+            return reward, terminated
+        elif self.ball_out_result == 'loss':
+            reward = -15.0  # Défaite (faute ou raté)
+            terminated = True
+            self.ball_in_play = False
+            return reward, terminated
+            
+        # Faute de service (pas de rebond sur son côté)
+        if self.service_fault:
+            reward = -10.0
+            terminated = True
+            self.ball_in_play = False
+            return reward, terminated
+
         # Double rebond = faute
         if self.ball.bounces_left >= 2:
             if agent_is_left:
@@ -329,26 +484,6 @@ class PingPongEnv(gym.Env):
             self.ball_in_play = False
             return reward, terminated
         
-        # Balle sortie par la gauche
-        if ball_x < 0:
-            if agent_is_left:
-                reward = -15.0  # Agent a laissé passer
-            else:
-                reward = 20.0   # Agent a marqué
-            terminated = True
-            self.ball_in_play = False
-            return reward, terminated
-        
-        # Balle sortie par la droite
-        if ball_x > WIDTH:
-            if not agent_is_left:
-                reward = -15.0  # Agent a laissé passer
-            else:
-                reward = 20.0   # Agent a marqué
-            terminated = True
-            self.ball_in_play = False
-            return reward, terminated
-        
         # Balle sortie par le bas (sous la table)
         if ball_y > HEIGHT:
             ball_last_hit_by_agent = (
@@ -362,27 +497,6 @@ class PingPongEnv(gym.Env):
             terminated = True
             self.ball_in_play = False
             return reward, terminated
-        
-        # Service invalide
-        if self.ball.is_service:
-            if self.ball.last_hit_by == 'left':
-                if ball_x > net_center and self.ball.bounces_left == 0:
-                    if agent_is_left:
-                        reward = -10.0  # Service invalide de l'agent
-                    else:
-                        reward = 10.0
-                    terminated = True
-                    self.ball_in_play = False
-                    return reward, terminated
-            elif self.ball.last_hit_by == 'right':
-                if ball_x < net_center and self.ball.bounces_right == 0:
-                    if not agent_is_left:
-                        reward = -10.0
-                    else:
-                        reward = 10.0
-                    terminated = True
-                    self.ball_in_play = False
-                    return reward, terminated
         
         # === RÉCOMPENSES INTERMÉDIAIRES (jalons) ===
         
@@ -450,21 +564,21 @@ class PingPongEnv(gym.Env):
         # On utilise agent_hits qui est incrémenté UNIQUEMENT lors d'une vraie collision
         
         # Récompense pour toucher (une seule fois par frappe)
-        if self.agent_hits > self._last_hit_count:
-            reward += 3.0  # Bonne récompense pour avoir touché
-            self._last_hit_count = self.agent_hits
+        if self.pending_hit_reward:
+            reward += 10.0  # Bonne récompense pour avoir touché
+            self.pending_hit_reward = False
         
         # === JALON 5 : Balle qui rebondit chez l'adversaire ===
         # Récompenser quand la balle rebondit sur la table adverse après notre frappe
         if self.agent_hits > 0 and ball_going_to_opponent:
             if agent_is_left and self.ball.bounces_right > 0:
-                if (self.steps - self._bounce_rewarded_step) > 10:
-                    reward += 5.0  # Super ! La balle est en jeu chez l'adversaire
-                    self._bounce_rewarded_step = self.steps
+                if not self.bounce_reward_given:
+                    reward += 50.0  # Super ! La balle est en jeu chez l'adversaire
+                    self.bounce_reward_given = True
             elif not agent_is_left and self.ball.bounces_left > 0:
-                if (self.steps - self._bounce_rewarded_step) > 10:
-                    reward += 5.0
-                    self._bounce_rewarded_step = self.steps
+                if not self.bounce_reward_given:
+                    reward += 50.0
+                    self.bounce_reward_given = True
         
         # === PÉNALITÉS ===
         

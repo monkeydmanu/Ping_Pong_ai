@@ -2,6 +2,11 @@
 Boucle principale du jeu et gestion des entités.
 """
 
+import sys
+import os
+# Ajouter le dossier parent au path pour permettre les imports depuis la racine
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import pygame
 from core.ball import Ball, spawn_ball_left, spawn_ball_right
 from config import WIDTH, HEIGHT, GREEN, FPS
@@ -41,6 +46,7 @@ class Game:
         self.serving_side = 'left'  # Qui sert ('left' ou 'right')
         self.point_message = ""  # Message à afficher (ex: "Faute!")
         self.message_timer = 0   # Timer pour afficher le message
+        self.respawn_timer = 0   # Timer pour respawn automatique
 
         # Balles (vide au départ, appuyer sur R ou T pour lancer)
         self.balls = []
@@ -48,6 +54,9 @@ class Game:
         # Tracking du côté de la balle (pour réinitialiser can_hit)
         # 'left' si la balle est à gauche du filet, 'right' si à droite
         self.ball_side = None
+
+        # Lancer la première balle après un court délai
+        self.respawn_timer = 60
 
     def run(self):
         """Boucle principale du jeu."""
@@ -122,17 +131,34 @@ class Game:
         """Supprime la balle actuelle et en crée une au bord gauche."""
         self.balls.clear()
         self.balls.append(spawn_ball_left(self.table))
+        # Réinitialiser l'état du jeu pour le nouveau point
+        self.ball_side = None
+        for player in self.players:
+            player.can_hit = True
 
     def spawn_ball_at_right(self):
         """Supprime la balle actuelle et en crée une au bord droit."""
         self.balls.clear()
         self.balls.append(spawn_ball_right(self.table))
+        # Réinitialiser l'état du jeu pour le nouveau point
+        self.ball_side = None
+        for player in self.players:
+            player.can_hit = True
 
     def update(self):
         """Met à jour l'état du jeu (physique, logique)."""
         # Timer pour message temporaire
         if self.message_timer > 0:
             self.message_timer -= 1
+            
+        # Timer pour respawn automatique
+        if self.respawn_timer > 0:
+            self.respawn_timer -= 1
+            if self.respawn_timer == 0 and not self.balls:
+                if self.serving_side == 'left':
+                    self.spawn_ball_at_left()
+                else:
+                    self.spawn_ball_at_right()
         
         # Timer pour affichage debug toutes les 0.5s
         self.debug_timer += 1
@@ -144,55 +170,123 @@ class Game:
                 self.last_paddle_vel = (self.player.vel[0], self.player.vel[1])
                 self.last_spin = ball.angular_speed
         
+        # Sub-stepping pour la physique (4x par frame)
+        dt = 1.0 / FPS
+        n_substeps = 4
+        dt_sub = dt / n_substeps
+
         for ball in self.balls[:]:
-            ball.update()
-            
-            # Détecter le changement de côté de la balle
-            net_center = WIDTH // 2
-            current_side = 'left' if ball.pos[0] < net_center else 'right'
-            
-            # Si la balle change de côté, réinitialiser can_hit et les compteurs de rebonds
-            if self.ball_side is not None and current_side != self.ball_side:
-                # Vérifier si le service est valide AVANT de reset
-                if ball.is_service:
-                    # Le serveur à gauche doit avoir fait rebondir sur son côté (gauche) avant de passer à droite
-                    if ball.last_hit_by == 'left' and self.ball_side == 'left' and ball.bounces_left == 0:
-                        self.award_point('right', "Service invalide!")
-                        self.balls.remove(ball)
-                        continue
-                    # Le serveur à droite doit avoir fait rebondir sur son côté (droite) avant de passer à gauche
-                    elif ball.last_hit_by == 'right' and self.ball_side == 'right' and ball.bounces_right == 0:
-                        self.award_point('left', "Service invalide!")
-                        self.balls.remove(ball)
-                        continue
-                    ball.is_service = False
+            for _ in range(n_substeps):
+                ball.update(dt=dt_sub)
                 
-                for player in self.players:
-                    player.can_hit = True
-                # Reset le compteur de rebonds du côté qu'on quitte
-                if self.ball_side == 'left':
-                    ball.bounces_left = 0
-                else:
-                    ball.bounces_right = 0
+                # === DETECTION BALLE OUT (Table + Marge) ===
+                # Règle stricte : si la balle dépasse la table de 10px, le point est fini.
+                margin = 10
+                table_left_limit = self.table.x - margin
+                table_right_limit = self.table.x + self.table.width + margin
+                
+                ball_out_winner = None
+                ball_out_reason = ""
+                
+                # Sortie à gauche
+                if ball.pos[0] < table_left_limit:
+                    if ball.bounces_left == 0:
+                        # Sortie sans rebond à gauche -> Faute du tireur (celui qui a envoyé vers la gauche = Droite)
+                        ball_out_winner = 'left'
+                        ball_out_reason = "Sortie (Faute Adv.)"
+                    else:
+                        # Rebond valide, mais balle sort -> Le receveur (gauche) a raté
+                        ball_out_winner = 'right'
+                        ball_out_reason = "Sortie (Raté)"
+                            
+                # Sortie à droite
+                elif ball.pos[0] > table_right_limit:
+                    if ball.bounces_right == 0:
+                        # Sortie sans rebond à droite -> Faute du tireur (celui qui a envoyé vers la droite = Gauche)
+                        ball_out_winner = 'right'
+                        ball_out_reason = "Sortie (Faute Adv.)"
+                    else:
+                        # Rebond valide, balle sort -> Le receveur (droite) a raté
+                        ball_out_winner = 'left'
+                        ball_out_reason = "Sortie (Raté)"
+                
+                if ball_out_winner:
+                    self.award_point(ball_out_winner, ball_out_reason)
+                    self.balls.remove(ball)
+                    break # Sortir du sub-stepping
+
+                # Détecter le changement de côté de la balle
+                net_center = WIDTH // 2
+                current_side = 'left' if ball.pos[0] < net_center else 'right'
+                
+                # Si la balle change de côté, réinitialiser can_hit et les compteurs de rebonds
+                if self.ball_side is not None and current_side != self.ball_side:
+                    # Vérifier si le service est valide AVANT de reset
+                    if ball.is_service:
+                        # Le serveur à gauche doit avoir fait rebondir sur son côté (gauche) avant de passer à droite
+                        if ball.last_hit_by == 'left' and self.ball_side == 'left' and ball.bounces_left == 0:
+                            self.award_point('right', "Service invalide!")
+                            self.balls.remove(ball)
+                            break # Sortir du sub-stepping
+                        # Le serveur à droite doit avoir fait rebondir sur son côté (droite) avant de passer à gauche
+                        elif ball.last_hit_by == 'right' and self.ball_side == 'right' and ball.bounces_right == 0:
+                            self.award_point('left', "Service invalide!")
+                            self.balls.remove(ball)
+                            break # Sortir du sub-stepping
+                        ball.is_service = False
+                    
+                    for player in self.players:
+                        player.can_hit = True
+                    # Reset le compteur de rebonds du côté qu'on quitte
+                    if self.ball_side == 'left':
+                        ball.bounces_left = 0
+                    else:
+                        ball.bounces_right = 0
+                
+                self.ball_side = current_side
+                
+                # collisions
+                check_table_collision(ball, self.table)
+                check_ball_net(ball, self.net)
+                
+                # Vérifier double rebond (faute)
+                point_scored = self.check_point_scored(ball)
+                if point_scored:
+                    break # Sortir du sub-stepping
+                
+                # collision avec les raquettes
+                for i, player in enumerate(self.players):
+                    old_can_hit = player.can_hit
+                    check_ball_paddle(ball, player, self.screen)
+                    # Si le joueur a frappé la balle
+                    if old_can_hit and not player.can_hit:
+                        # === DETECTION VOLLEY (OBSTRUCTION) ===
+                        from config import TABLE_WIDTH_PX
+                        table_x = (WIDTH - TABLE_WIDTH_PX) // 2
+                        table_left_edge = table_x
+                        table_right_edge = table_x + TABLE_WIDTH_PX
+                        
+                        is_volley = False
+                        if i == 0: # Player (gauche)
+                            # Balle vient de droite, pas de rebond à gauche, au-dessus de la table
+                            if ball.bounces_left == 0 and ball.pos[0] > table_left_edge:
+                                is_volley = True
+                                self.award_point('right', "Obstruction!")
+                        else: # Opponent (droite)
+                            # Balle vient de gauche, pas de rebond à droite, au-dessus de la table
+                            if ball.bounces_right == 0 and ball.pos[0] < table_right_edge:
+                                is_volley = True
+                                self.award_point('left', "Obstruction!")
+                        
+                        if is_volley:
+                            self.balls.remove(ball)
+                            break # Sortir du sub-stepping
+
+                        ball.last_hit_by = 'left' if i == 0 else 'right'
             
-            self.ball_side = current_side
-            
-            # collisions
-            check_table_collision(ball, self.table)
-            check_ball_net(ball, self.net)
-            
-            # Vérifier double rebond (faute)
-            point_scored = self.check_point_scored(ball)
-            if point_scored:
+            # Si la balle a été supprimée (point marqué), on arrête de la traiter
+            if ball not in self.balls:
                 continue
-            
-            # collision avec les raquettes
-            for i, player in enumerate(self.players):
-                old_can_hit = player.can_hit
-                check_ball_paddle(ball, player, self.screen)
-                # Si le joueur a frappé la balle
-                if old_can_hit and not player.can_hit:
-                    ball.last_hit_by = 'left' if i == 0 else 'right'
         
         for player in self.players:
             player.update(1.0/FPS)  # dt = 1/120 = 0.0083s par frame
@@ -210,15 +304,8 @@ class Game:
             point_for = 'left'
             reason = "Double rebond!"
         
-        # Balle sortie par la gauche
-        elif ball.pos[0] < 0:
-            point_for = 'right'
-            reason = "Sortie!"
-        
-        # Balle sortie par la droite
-        elif ball.pos[0] > WIDTH:
-            point_for = 'left'
-            reason = "Sortie!"
+        # Note: Les sorties latérales sont gérées directement dans la boucle update
+        # avec la règle stricte (Table + 10px)
         
         # Balle sortie par le bas (tombe)
         elif ball.pos[1] > HEIGHT:
@@ -249,6 +336,9 @@ class Game:
         total_points = self.score_left + self.score_right
         if total_points % 2 == 0:
             self.serving_side = 'left' if self.serving_side == 'right' else 'right'
+            
+        # Programmer le respawn automatique
+        self.respawn_timer = 60  # 1 seconde d'attente avant le prochain service
 
     def draw(self):
         """Dessine les éléments à l'écran."""

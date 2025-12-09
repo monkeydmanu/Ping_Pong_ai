@@ -94,6 +94,9 @@ class Agent:
             
             advantage = T.tensor(advantage).to(self.actor.device)
             values = T.tensor(values).to(self.actor.device)
+
+            # Normalisation des avantages (Crucial pour la stabilité)
+            advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
             
             for batch in batches:
                 states = T.tensor(state_arr[batch], dtype=T.float).to(self.actor.device)
@@ -108,6 +111,7 @@ class Agent:
                 # Calculer les nouvelles log probs
                 dist = Normal(mu, std)
                 new_probs = dist.log_prob(actions).sum(dim=-1)
+                entropy = dist.entropy().sum(dim=-1).mean()  # Bonus d'entropie
                 
                 # Ratio pour PPO
                 prob_ratio = (new_probs - old_probs).exp()
@@ -124,13 +128,16 @@ class Agent:
                 critic_loss = (returns - critic_value) ** 2
                 critic_loss = critic_loss.mean()
 
-                # Loss totale
-                total_loss = actor_loss + 0.5 * critic_loss
+                # Loss totale avec bonus d'entropie (0.01 est un coeff standard)
+                total_loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy
                 
                 # Backpropagation
                 self.actor.optimizer.zero_grad()
                 self.critic.optimizer.zero_grad()
                 total_loss.backward()
+                # Clipping des gradients pour éviter l'explosion
+                T.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+                T.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
 
