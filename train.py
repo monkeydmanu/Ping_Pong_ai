@@ -148,10 +148,10 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
     env = PingPongEnv(render_mode=render_mode)
     
     # Créer l'agent
-    # Observation: 12 valeurs, Actions: 3 valeurs continues
+    # Observation: 18 valeurs, Actions: 3 valeurs continues
     agent = Agent(
         n_actions=3,          # move_x, move_y, rotate
-        input_dims=12,        # taille de l'observation
+        input_dims=18,        # taille de l'observation (18 variables)
         gamma=0.99,
         alpha=alpha,
         gae_lambda=0.95,
@@ -206,8 +206,8 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
             action, prob, val = agent.choose_action(observation)
             
             # Exécuter l'action
-            observation_, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
+            observation_, reward, terminated, info = env.step(action)
+            done = terminated
             
             n_steps += 1
             score += reward
@@ -242,8 +242,14 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
             best_score = avg_score
             agent.save_models()
         
-        # Déterminer si l'agent a gagné
-        won = "✓" if score > 10 else "✗"
+        # Déterminer si l'agent a gagné (utiliser le flag point_winner_side)
+        episode_winner = env.point_winner_side
+        if episode_winner == 'left' and env.agent_side == 'left':
+            won = "✓"
+        elif episode_winner == 'right' and env.agent_side == 'right':
+            won = "✓"
+        else:
+            won = "✗"
 
         # Afficher la progression
         print(f'Ep {i+1:4d} | Score: {score:7.1f} | Avg: {avg_score:7.1f} | '
@@ -287,7 +293,7 @@ def play(model_path='models/ppo', num_episodes=5):
     
     agent = Agent(
         n_actions=3,
-        input_dims=12,
+        input_dims=18,
         gamma=0.99,
         alpha=0.0003,
         chkpt_dir=model_path
@@ -306,10 +312,10 @@ def play(model_path='models/ppo', num_episodes=5):
         while not done:
             # Action déterministe pour le jeu
             action = predict_action(agent, observation, deterministic=True)
-            observation, reward, terminated, truncated, info = env.step(action)
+            observation, reward, terminated, info = env.step(action)
             total_reward += reward
             hits = info.get('agent_hits', 0)
-            done = terminated or truncated
+            done = terminated
         
         won = "✓ Gagné" if total_reward > 10 else "✗ Perdu"
         print(f"Episode {episode + 1}: Reward = {total_reward:.2f} | Hits: {hits} | {won}")
@@ -328,15 +334,19 @@ if __name__ == "__main__":
                         help='Afficher le jeu pendant l\'entraînement')
     parser.add_argument('--render_plot', action='store_true',
                         help='Afficher les graphiques en temps réel')
-    parser.add_argument('--resume', action='store_true',
-                        help='Reprendre l\'entraînement depuis le dernier modèle sauvegardé')
+    parser.add_argument('--resume', action='store_true', default=True,
+                        help='Reprendre l\'entraînement depuis le dernier modèle sauvegardé (par défaut: True)')
+    parser.add_argument('--fresh', action='store_true',
+                        help='Démarrer un nouvel entraînement from scratch (ignore le modèle existant)')
     parser.add_argument('--model_path', type=str, default='models/ppo',
                         help='Chemin vers le modèle')
     
     args = parser.parse_args()
     
     if args.mode == 'train':
+        # Par défaut resume=True, sauf si --fresh est spécifié
+        should_resume = args.resume and not args.fresh
         train(n_games=args.episodes, render=args.render, live_plot=args.render_plot,
-              resume=args.resume, model_path=args.model_path)
+              resume=should_resume, model_path=args.model_path)
     else:
         play(model_path=args.model_path, num_episodes=5)

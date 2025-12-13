@@ -57,10 +57,18 @@ class ActorNetwork(nn.Module):
         }, self.checkpoint_file)
 
     def load_checkpoint(self):
-        checkpoint = T.load(self.checkpoint_file, map_location=self.device)
-        self.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        print(f'    Actor chargé depuis {self.checkpoint_file}')
+        if not os.path.exists(self.checkpoint_file):
+            print(f'    ❌ Actor inexistant: {self.checkpoint_file}')
+            return False
+        try:
+            checkpoint = T.load(self.checkpoint_file, map_location=self.device)
+            self.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            print(f'    ✅ Actor chargé: {self.checkpoint_file}')
+            return True
+        except Exception as e:
+            print(f'    ❌ Actor non chargé: {e}')
+            return False
 
 
 class CriticNetwork(nn.Module):
@@ -97,7 +105,15 @@ class CriticNetwork(nn.Module):
         }, self.checkpoint_file)
 
     def load_checkpoint(self):
-        checkpoint = T.load(self.checkpoint_file, map_location=self.device)
-        self.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        print(f'    Critic chargé depuis {self.checkpoint_file}')
+        if not os.path.exists(self.checkpoint_file):
+            print(f'    ❌ Critic inexistant: {self.checkpoint_file}')
+            return False
+        try:
+            checkpoint = T.load(self.checkpoint_file, map_location=self.device)
+            self.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            print(f'    ✅ Critic chargé: {self.checkpoint_file}')
+            return True
+        except Exception as e:
+            print(f'    ❌ Critic non chargé: {e}')
+            return False

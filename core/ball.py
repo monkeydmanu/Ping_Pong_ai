@@ -19,17 +19,12 @@ class Ball:
         self.bounces_left = 0   # Nombre de rebonds sur la moitié gauche
         self.bounces_right = 0  # Nombre de rebonds sur la moitié droite
         self.last_hit_by = None  # 'left' ou 'right' - qui a frappé en dernier
-        self.is_service = True   # True si c'est un service en cours
+        self.service = None  # None, 'left', ou 'right' - côté qui serve, None quand service est terminé
 
     def update(self, dt=None):
         """Met à jour la position et la vitesse de la balle avec effet Magnus et traînée."""
         if dt is None:
             dt = 1.0 / FPS  # Temps réel par frame (1/120 = 0.0083s)
-        
-        # Décrémenter le cooldown de collision (en fonction du temps)
-        if self.collision_cooldown > 0:
-            # On décrémente de 1 par frame "standard" (1/FPS)
-            self.collision_cooldown -= dt * FPS
         
         # Vitesse en pixels/s pour calculer la norme
         speed_px = np.linalg.norm(self.vel)
@@ -77,8 +72,7 @@ def spawn_ball_left(table):
         vy=0,
         angular_speed=0
     )
-    ball.is_service = True
-    ball.last_hit_by = 'left'  # Le serveur est à gauche
+    ball.service = 'left'  # Service depuis la gauche
     return ball
 
 
@@ -92,6 +86,5 @@ def spawn_ball_right(table):
         vy=0,
         angular_speed=0
     )
-    ball.is_service = True
-    ball.last_hit_by = 'right'  # Le serveur est à droite
+    ball.service = 'right'  # Service depuis la droite
     return ball

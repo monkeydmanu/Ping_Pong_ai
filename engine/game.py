@@ -181,7 +181,7 @@ class Game:
                 
                 # === DETECTION BALLE OUT (Table + Marge) ===
                 # Règle stricte : si la balle dépasse la table de 10px, le point est fini.
-                margin = 10
+                margin = 15
                 table_left_limit = self.table.x - margin
                 table_right_limit = self.table.x + self.table.width + margin
                 
@@ -222,18 +222,19 @@ class Game:
                 # Si la balle change de côté, réinitialiser can_hit et les compteurs de rebonds
                 if self.ball_side is not None and current_side != self.ball_side:
                     # Vérifier si le service est valide AVANT de reset
-                    if ball.is_service:
-                        # Le serveur à gauche doit avoir fait rebondir sur son côté (gauche) avant de passer à droite
-                        if ball.last_hit_by == 'left' and self.ball_side == 'left' and ball.bounces_left == 0:
+                    if ball.service is not None:
+                        # Le serveur doit avoir fait rebondir sur son côté avant de passer à l'autre
+                        server_side = ball.service
+                        if server_side == 'left' and ball.bounces_left == 0:
                             self.award_point('right', "Service invalide!")
                             self.balls.remove(ball)
                             break # Sortir du sub-stepping
                         # Le serveur à droite doit avoir fait rebondir sur son côté (droite) avant de passer à gauche
-                        elif ball.last_hit_by == 'right' and self.ball_side == 'right' and ball.bounces_right == 0:
+                        elif server_side == 'right' and ball.bounces_right == 0:
                             self.award_point('left', "Service invalide!")
                             self.balls.remove(ball)
                             break # Sortir du sub-stepping
-                        ball.is_service = False
+                        ball.service = None  # Service terminé
                     
                     for player in self.players:
                         player.can_hit = True
