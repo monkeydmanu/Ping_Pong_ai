@@ -609,7 +609,7 @@ class PingPongEnv(gym.Env):
         else:
             ideal_x = WIDTH - 80  # Proche du bord droit
         
-        ideal_y = TABLE_Y  # Au niveau de la table
+        ideal_y = TABLE_Y - 50  # Au niveau de la table
         
         dist_to_ideal_x = abs(paddle_center_x - ideal_x)
         dist_to_ideal_y = abs(paddle_center_y - ideal_y)
@@ -617,8 +617,6 @@ class PingPongEnv(gym.Env):
         # Petite récompense pour être en bonne position quand la balle est loin
         if not ball_on_agent_side and not ball_coming_to_agent:
             position_score = 0.0
-            if dist_to_ideal_x < 100:
-                position_score += 0.002
             if dist_to_ideal_y < 80:
                 position_score += 0.002
             reward += position_score
@@ -626,7 +624,7 @@ class PingPongEnv(gym.Env):
         # === JALON 2 : Tracking de la balle ===
         # Quand la balle vient vers l'agent ET est de son côté, récompenser le suivi en Y
         # IMPORTANT: On ne récompense PAS si la balle est encore en l'air au-dessus de la table
-        ball_is_playable = ball_y > (TABLE_Y - 250)  # Balle à hauteur jouable
+        ball_is_playable = ball_y > (TABLE_Y - 50)  # Balle à hauteur jouable
         
         if ball_on_agent_side and ball_is_playable:
             y_diff = abs(paddle_center_y - ball_y)
@@ -679,11 +677,6 @@ class PingPongEnv(gym.Env):
         # Pénalité pour plonger trop bas (sous la table)
         if paddle_center_y > TABLE_Y + 100:
             reward -= 0.02  # Ne pas descendre trop bas
-
-        # Récompense pour rester à hauteur de table quand la balle n'est pas jouable
-        if not ball_is_playable:
-            if abs(paddle_center_y - TABLE_Y) < 50:
-                reward += 0.005  # Bien positionné en attente
         
         # Pénalité pour mouvements erratiques (stabilité)
         paddle_speed = np.sqrt(self.agent_paddle.vel[0]**2 + self.agent_paddle.vel[1]**2)
