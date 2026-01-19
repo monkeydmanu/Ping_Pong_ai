@@ -13,12 +13,17 @@ import os
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
-import pygame
 from collections import deque
 from config import FPS
 
 from ai.agent import Agent, predict_action
 from ai.environment import PingPongEnv
+
+# Pygame sera importé seulement si nécessaire
+try:
+    import pygame
+except ImportError:
+    pygame = None
 
 
 def plot_learning_curve(x, scores, figure_file):
@@ -126,18 +131,19 @@ def update_live_plot(fig, ax1, ax2, scores, update_freq=10):
     fig.canvas.flush_events()
 
 
-def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003, 
+def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
           render=False, save_best=True, live_plot=True, plot_first_episode=True,
-          resume=False, model_path='models/ppo'):
+          resume=False, model_path='models/ppo', gamma=0.98):
     """
     Entraîne l'agent PPO sur Ping-Pong.
     
     Args:
-        n_games: Nombre d'épisodes d'entraînement
-        N: Nombre de steps avant chaque mise à jour
+        n_games: Nombre d'épisodes d'entraînement (parties complètes)
+        N: Nombre de steps avant chaque mise à jour (512 = ~2-3 points)
         batch_size: Taille des mini-batches
-        n_epochs: Nombre d'epochs par mise à jour
+        n_epochs: Nombre de fois qu'on réutilise les mêmes données par update
         alpha: Learning rate
+        gamma: Discount factor (influence des rewards futurs)
         render: Afficher le jeu pendant l'entraînement
         save_best: Sauvegarder le meilleur modèle
         live_plot: Afficher un graphique en temps réel
@@ -149,12 +155,18 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
     render_mode = "human" if render else None
     env = PingPongEnv(render_mode=render_mode)
     
+    # Initialiser Pygame et un clock si render est activé (pour gestion events + tick)
+    clock = None
+    if render and pygame:
+        pygame.init()
+        clock = pygame.time.Clock()
+    
     # Créer l'agent
     # Observation: 18 valeurs, Actions: 3 valeurs continues
     agent = Agent(
         n_actions=3,          # move_x, move_y, rotate
         input_dims=18,        # taille de l'observation (18 variables)
-        gamma=0.99,
+        gamma=gamma,          # Paramètre configurable (0.98 par défaut)
         alpha=alpha,
         gae_lambda=0.95,
         policy_clip=0.2,
@@ -203,33 +215,49 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
         episode_rewards = []  # Track rewards de cet épisode
         episode_hits = 0
         
+        last_info = None
+
         while not done:
+            # Gérer les événements pygame uniquement si render est activé ET pygame existe
+            if render and pygame:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        done = True
+                        break
+                if done:
+                    break
+
             # Choisir une action
             action, prob, val = agent.choose_action(observation)
-            
+
             # Exécuter l'action
             observation_, terminated, info = env.step(action)
-            
+            last_info = info  # garder le dernier info pour log de fin
+
             # Calculer la récompense pour l'entraînement
             reward = env.compute_reward(info)
             done = terminated
-            
+
             n_steps += 1
             score += reward
             episode_rewards.append(reward)
-            
+
             # Récupérer le nombre de hits depuis l'environnement
             episode_hits = info.get('agent_hits', 0)
-            
+
             # Stocker la transition
             agent.remember(observation, action, prob, val, reward, done)
-            
+
             # Apprendre tous les N steps
             if n_steps % N == 0:
                 agent.learn()
                 learn_iters += 1
-            
+
             observation = observation_
+
+            # Cadencer le temps réel seulement si on affiche
+            if render and clock:
+                clock.tick(FPS)
         
         # Plot des rewards du premier épisode
         if i == 0 and plot_first_episode:
@@ -259,6 +287,12 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
         # Afficher la progression
         print(f'Ep {i+1:4d} | Score: {score:7.1f} | Avg: {avg_score:7.1f} | '
               f'Hits: {episode_hits} | Won: {won} | Steps: {len(episode_rewards):3d}')
+
+        # Log détaillé de fin d'épisode (faute / vainqueur) pour debug même sans render
+        if last_info is not None:
+            faults = last_info.get('faults', {})
+            winner = last_info.get('winner_side')
+            print(f"    EndReason | winner_side={winner} | faults={faults}")
         
         # Mettre à jour le plot live
         if live_plot and fig is not None:
@@ -277,6 +311,13 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
     print("=== Entraînement terminé ===")
     
     return agent, score_history
+
+
+def _update_ball_debug_info(game):
+    """Met à jour les infos de debug pour la vitesse et le spin de la balle."""
+    if game.env.ball_in_play and game.env.ball:
+        game.last_ball_vel = (game.env.ball.vel[0], game.env.ball.vel[1])
+        game.last_spin = game.env.ball.angular_speed
 
 
 def play_ai_vs_ai(model_path='models/ppo', num_episodes=5):
@@ -346,6 +387,9 @@ def play_ai_vs_ai(model_path='models/ppo', num_episodes=5):
             
             steps += 1
             
+            # Mettre à jour les infos de debug (vitesse et spin de la balle)
+            _update_ball_debug_info(game)
+            
             # Afficher visuellement
             game.draw()
             game.clock.tick(FPS)
@@ -359,30 +403,34 @@ def play_ai_vs_ai(model_path='models/ppo', num_episodes=5):
     pygame.quit()
 
 
-def play_human_vs_human():
+def play_human_vs_human(mouse_control_p1=False):
     """
     1v1 entre deux joueurs humains avec affichage complet.
-    Joueur 1 (gauche): Z/S (vertical), Q/D (horizontal), A/E (rotation)
+    Joueur 1 (gauche): Souris si mouse_control_p1=True, sinon Z/S (vertical), Q/D (horizontal), A/E (rotation)
     Joueur 2 (droite): O/L (vertical), K/M (horizontal), I/P (rotation)
     """
     from engine.game import Game
     
     print("=== Mode Humain vs Humain ===")
-    print("Joueur 1 (gauche): Z/S=vertical, Q/D=horizontal, A/E=rotation")
+    if mouse_control_p1:
+        print("Joueur 1 (gauche): SOURIS (clics pour rotation)")
+    else:
+        print("Joueur 1 (gauche): Z/S=vertical, Q/D=horizontal, A/E=rotation")
     print("Joueur 2 (droite): O/L=vertical, K/M=horizontal, I/P=rotation")
     
-    game = Game(player1_type="human", player2_type="human")
+    game = Game(player1_type="human", player2_type="human", mouse_control_p1=mouse_control_p1)
     game.run()
     
     print("Fin du jeu!")
 
 
-def play_ai_vs_human(model_path='models/ppo'):
+def play_ai_vs_human(model_path='models/ppo', mouse_control_p1=False):
     """
     IA vs Joueur Humain avec affichage complet.
     
     Args:
         model_path: Chemin vers les modèles sauvegardés
+        mouse_control_p1: Si True, contrôler joueur 1 à la souris
     """
     # Vérifier que le modèle existe
     actor_path = os.path.join(model_path, 'actor_torch_ppo')
@@ -404,10 +452,13 @@ def play_ai_vs_human(model_path='models/ppo'):
     print(f"✅ Modèle chargé depuis {model_path}")
     
     print("=== Mode IA vs Humain ===")
-    print("Vous êtes le joueur 1 (gauche): Z/S=vertical, Q/D=horizontal, A/E=rotation")
+    if mouse_control_p1:
+        print("Vous êtes le joueur 1 (gauche): SOURIS (clics pour rotation)")
+    else:
+        print("Vous êtes le joueur 1 (gauche): Z/S=vertical, Q/D=horizontal, A/E=rotation")
     print("L'IA est le joueur 2 (droite)")
     
-    game = Game(player1_type="human", player2_type="ai")
+    game = Game(player1_type="human", player2_type="ai", mouse_control_p1=mouse_control_p1)
     
     # On doit modifier le jeu pour utiliser l'agent IA pour player2
     # Créer une boucle spéciale
@@ -443,6 +494,9 @@ def play_ai_vs_human(model_path='models/ppo'):
         if game.message_timer > 0:
             game.message_timer -= 1
         
+        # Mettre à jour les infos de debug (vitesse et spin de la balle)
+        _update_ball_debug_info(game)
+        
         game.draw()
         game.clock.tick(FPS)
     
@@ -467,6 +521,8 @@ if __name__ == "__main__":
                         help='Démarrer un nouvel entraînement from scratch (ignore le modèle existant)')
     parser.add_argument('--model_path', type=str, default='models/ppo',
                         help='Chemin vers le modèle')
+    parser.add_argument('--mouse', action='store_true',
+                        help='Activer le contrôle à la souris pour le joueur 1 (modes: human, ai_vs_human)')
     
     args = parser.parse_args()
     
@@ -478,18 +534,66 @@ if __name__ == "__main__":
     elif args.mode == 'play':
         play_ai_vs_ai(model_path=args.model_path, num_episodes=args.episodes)
     elif args.mode == 'human':
-        play_human_vs_human()
+        play_human_vs_human(mouse_control_p1=args.mouse)
     elif args.mode == 'ai_vs_human':
-        play_ai_vs_human(model_path=args.model_path)
+        play_ai_vs_human(model_path=args.model_path, mouse_control_p1=args.mouse)
 
-# pour train ia vs ia
-# python train.py --mode train --episodes 1000 --render_plot
+# Mode 1: Entraînement basique
+# # Basique (1000 épisodes, reprend depuis modèle existant)
+# python train.py --mode train
 
-# pour play ia vs ia 
-# python train.py --mode play --model_path models/ppo --episodes 20
+# # Avec affichage du jeu
+# python train.py --mode train --render
 
-# pour humain vs humain
+# # Avec graphique en temps réel
+# python train.py --mode train --render_plot
+
+# # Personnaliser le nombre d'épisodes
+# python train.py --mode train --episodes 500
+# python train.py --mode train --episodes 2000
+
+# # Combiner options
+# python train.py --mode train --episodes 1000 --render --render_plot
+
+# # Démarrer un nouvel entraînement (oublier ancien modèle)
+# python train.py --mode train --fresh
+# python train.py --mode train --fresh --episodes 500 --render_plot
+
+# # Avec chemin modèle personnalisé
+# python train.py --mode train --model_path models/custom_model
+
+
+
+# Mode 2: IA vs IA affiché
+# # Basique (5 parties)
+# python train.py --mode play
+
+# # Nombre de parties
+# python train.py --mode play --episodes 10
+# python train.py --mode play --episodes 3
+
+# # Avec modèle personnalisé
+# python train.py --mode play --model_path models/custom_model
+# python train.py --mode play --episodes 20 --model_path models/custom_model
+
+
+
+# Mode 3: Humain vs Humain
+# # Clavier (défaut - ZQSD + AE pour joueur 1)
 # python train.py --mode human
 
-# pour ia vs humain
-# python train.py --mode ai_vs_human --model_path models/ppo
+# # Souris pour joueur 1 (clics pour rotation)
+# python train.py --mode human --mouse
+
+
+
+# Mode 4: IA vs Humain
+# # Clavier (défaut - ZQSD + AE)
+# python train.py --mode ai_vs_human
+
+# # Souris pour vous (le joueur 1)
+# python train.py --mode ai_vs_human --mouse
+
+# # Avec modèle personnalisé
+# python train.py --mode ai_vs_human --model_path models/custom_model
+# python train.py --mode ai_vs_human --model_path models/custom_model --mouse

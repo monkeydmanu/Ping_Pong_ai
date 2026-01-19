@@ -340,7 +340,7 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
         # === TRANSFERT VITESSE RAQUETTE → BALLE (seulement pour la mousse/raquette) ===
         if est_mousse:
             # Facteur de transfert de vitesse
-            velocity_transfer = 0.7  # 70% de la vitesse transférée
+            velocity_transfer = 1.2  # 120% de la vitesse transférée (amplifié pour plus de dynamique)
             
             # Ajouter la vitesse de la raquette à la balle
             ball.vel[0] += vel_x * velocity_transfer
@@ -364,7 +364,7 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
             # - Taper dessus (contact_ratio_y < 0) + mouvement vers la droite (vel_x > 0) = topspin (positif)
             # - Taper dessous (contact_ratio_y > 0) + mouvement vers la droite (vel_x > 0) = backspin (négatif)
             # Le signe du spin dépend de : -contact_ratio_y * signe(vel_x)
-            spin_generation = 0.2  # facteur de conversion
+            spin_generation = 0.5  # facteur de conversion amplifié (était 0.2)
             direction_x = 1 if vel_x >= 0 else -1  # direction du coup
             generated_spin = -contact_ratio_y * paddle_speed * spin_generation * direction_x
             

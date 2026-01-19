@@ -10,7 +10,8 @@ import pygame
 
 from config import (
     WIDTH, HEIGHT, FPS, TABLE_Y, PIXELS_PER_METER,
-    RACKET_WIDTH_PX, RACKET_HEIGHT_PX, TABLE_WIDTH_PX
+    RACKET_WIDTH_PX, RACKET_HEIGHT_PX, TABLE_WIDTH_PX,
+    ADAPTIVE_BOUNDARY_OFFSET
 )
 from core.ball import Ball, spawn_ball_left, spawn_ball_right
 from core.paddle import Paddle
@@ -46,7 +47,16 @@ class PingPongEnv(gym.Env):
     
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": FPS}
     
-    def __init__(self, render_mode=None, agent_side="left"):
+    def __init__(self, render_mode=None, agent_side="left", player1_mouse_control=False):
+        """
+        Initialise l'environnement Ping-Pong.
+        
+        Args:
+            render_mode (str): Mode de rendu ("human" ou "rgb_array")
+            agent_side (str): Côté de l'agent ("left" ou "right")
+            player1_mouse_control (bool): Si True, le joueur 1 est contrôlé à la souris
+                (dans ce cas, on n'applique que la rotation, pas le mouvement)
+        """
         super().__init__()
         
         self.render_mode = render_mode
@@ -82,6 +92,9 @@ class PingPongEnv(gym.Env):
             dtype=np.float32
         )
         
+        # === Contrôle du joueur 1 ===
+        self.player1_mouse_control = player1_mouse_control
+        
         # Initialisation Pygame (optionnel pour le rendu)
         self.screen = None
         self.clock = None
@@ -98,6 +111,7 @@ class PingPongEnv(gym.Env):
         self.last_hit_by = None  # "agent" ou "opponent"
         self.ball_in_play = False
         self.ball_side = None  # 'left' ou 'right' - côté actuel de la balle
+        self.is_agent_service = True
         
         # Scores
         self.score_left = 0
@@ -113,8 +127,6 @@ class PingPongEnv(gym.Env):
         self.pending_hit_reward = False
         self.ball_out_result = None  # 'win' ou 'loss'
         self.point_winner_side = None  # 'left' ou 'right'
-        self.service_bounce_server_done = False  # a-t-on déjà un rebond côté serveur pendant le service ?
-        self.service_bounce_receiver_done = False  # a-t-on déjà un rebond côté receveur pendant le service ?
         
         
     def reset(self, seed=None, options=None):
@@ -136,10 +148,10 @@ class PingPongEnv(gym.Env):
         
         # Randomiser le service (50% chance que l'agent serve)
         # Pour l'entraînement, on force l'agent à servir tout le temps
-        is_agent_service = True
+        self.is_agent_service = True
         # is_agent_service = np.random.choice([True, False])
         
-        if is_agent_service:
+        if self.is_agent_service:
             # L'agent sert
             if self.agent_side == "left":
                 self.ball = spawn_ball_left(self.table)
@@ -166,8 +178,6 @@ class PingPongEnv(gym.Env):
         self.pending_hit_reward = False
         self.ball_out_result = None # flag temporaire qui s'active et se désactive quand on touche une balle, pour donner une récompense une seule fois
         self.point_winner_side = None
-        self.service_bounce_server_done = False
-        self.service_bounce_receiver_done = False
         
         observation = self._get_observation()
         info = {}
@@ -292,8 +302,10 @@ class PingPongEnv(gym.Env):
                 if self.ball_out_result is None and self.ball.pos[1] > HEIGHT:
                     last = self.ball.last_hit_by
                     
-                    # Déterminer de quel côté la balle tombe
-                    net_center = WIDTH // 2
+                    # Déterminer de quel côté la balle tombe (avec offset adaptatif)
+                    # Si la balle va à droite: offset +ADAPTIVE_BOUNDARY_OFFSET, si elle va à gauche: offset -ADAPTIVE_BOUNDARY_OFFSET
+                    velocity_offset = ADAPTIVE_BOUNDARY_OFFSET if self.ball.vel[0] > 0 else -ADAPTIVE_BOUNDARY_OFFSET
+                    net_center = WIDTH // 2 + velocity_offset
                     ball_falls_on_left = self.ball.pos[0] < net_center
                     
                     # Déterminer qui gagne selon où tombe la balle et qui a frappé en dernier
@@ -332,8 +344,10 @@ class PingPongEnv(gym.Env):
                 check_table_collision(self.ball, self.table)
                 check_ball_net(self.ball, self.net)
 
-                # Détecter le changement de côté de la balle
-                net_center = WIDTH // 2
+                # Détecter le changement de côté de la balle (avec offset adaptatif basé sur la vélocité)
+                # Si la balle va à droite: offset +ADAPTIVE_BOUNDARY_OFFSET, si elle va à gauche: offset -ADAPTIVE_BOUNDARY_OFFSET
+                velocity_offset = ADAPTIVE_BOUNDARY_OFFSET if self.ball.vel[0] > 0 else -ADAPTIVE_BOUNDARY_OFFSET
+                net_center = WIDTH // 2 + velocity_offset
                 current_side = 'left' if self.ball.pos[0] < net_center else 'right'
                 
                 # Si la balle change de côté
@@ -341,6 +355,15 @@ class PingPongEnv(gym.Env):
                     # Reset les compteurs de rebonds et can_hit
                     self.agent_paddle.can_hit = True
                     self.opponent_paddle.can_hit = True
+
+                    if self.is_agent_service:
+                        server_side = self.ball.service
+                        if server_side == 'left' and current_side == 'right':
+                            if self.ball.bounces_left != 1:
+                                self.service_fault = True
+                        elif server_side == 'right' and current_side == 'left':
+                            if self.ball.bounces_right != 1:
+                                self.service_fault = True
                     
                     # Reset du flag de double touche quand la balle change de côté, le already_hit ne sert plus à rien, c'est plus possible de toucher plusieurs fois
                     if current_side != self.agent_side:
@@ -439,6 +462,7 @@ class PingPongEnv(gym.Env):
             faults['out'] = True
             # point_winner_side déjà défini dans la détection OUT
             terminated = True
+            print("OUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUTTTTTTTTTTTTTTTTTTTTTTTT")
             self.ball_in_play = False
             self._update_scores("Out!")
         
@@ -450,6 +474,7 @@ class PingPongEnv(gym.Env):
             if server_side in ('left', 'right'):
                 self.point_winner_side = 'right' if server_side == 'left' else 'left'
             terminated = True
+            print("SERRRRRRVVVVVVVVVVVIIIIIIIIIIIIIIICEEEEEEE")
             self.ball_in_play = False
             self._update_scores("Service invalide!")
         
@@ -475,26 +500,37 @@ class PingPongEnv(gym.Env):
         return observation, terminated, info
     
     def _apply_action(self, paddle, action):
-        """Applique une action continue à une raquette."""
+        """
+        Applique une action continue à une raquette.
+        
+        Si player1_mouse_control est True et c'est la raquette agent (joueur 1),
+        on n'applique que la rotation (move_x et move_y sont gérés par la souris).
+        """
         move_x, move_y, rotate = action
         
-        # Mouvement horizontal
-        if move_x > 0.3:
-            paddle.move_right()
-        elif move_x < -0.3:
-            paddle.move_left()
+        # Si c'est l'agent et que le contrôle souris est activé, sauter les mouvements
+        # (ils sont gérés par la souris dans Game)
+        if paddle == self.agent_paddle and self.player1_mouse_control:
+            # Ne pas appliquer move_x et move_y, juste la rotation
+            pass
         else:
-            paddle.stop_horizontal()
+            # Mouvement horizontal
+            if move_x > 0.3:
+                paddle.move_right()
+            elif move_x < -0.3:
+                paddle.move_left()
+            else:
+                paddle.stop_horizontal()
+            
+            # Mouvement vertical
+            if move_y > 0.3:
+                paddle.move_down()
+            elif move_y < -0.3:
+                paddle.move_up()
+            else:
+                paddle.stop_vertical()
         
-        # Mouvement vertical
-        if move_y > 0.3:
-            paddle.move_down()
-        elif move_y < -0.3:
-            paddle.move_up()
-        else:
-            paddle.stop_vertical()
-        
-        # Rotation
+        # Rotation (toujours appliquée, même en mode souris)
         if rotate > 0.3:
             paddle.rotate_right(1)
         elif rotate < -0.3:
@@ -568,50 +604,52 @@ class PingPongEnv(gym.Env):
         winner_side = info.get('winner_side')
         faults = info.get('faults', {})
         
-        # === RÉCOMPENSES TERMINALES ===
-        if winner_side is not None:
-            # Déterminer si l'agent a gagné ou perdu
-            agent_wins = (
-                (winner_side == 'left' and agent_is_left) or
-                (winner_side == 'right' and not agent_is_left)
-            )
-            
-            # Récompenses selon le type de faute
-            if faults.get('volley_left') or faults.get('volley_right'):
-                # Faute de volée
-                reward = 20.0 if agent_wins else -10.0
-                if self.render_mode == "human":
-                    print(f"    {'🟢' if agent_wins else '🔴'} FIN: Volée (reward={reward})")
-            
-            elif faults.get('double_bounce_left') or faults.get('double_bounce_right'):
-                # Double rebond - adversaire n'a pas réussi à toucher
-                reward = 20.0 if agent_wins else -15.0
-                if self.render_mode == "human":
-                    print(f"    {'🟢' if agent_wins else '🔴'} FIN: Double rebond (reward={reward})")
-            
-            elif faults.get('out'):
-                # Balle sortie
-                reward = 20.0 if agent_wins else -15.0
-                if self.render_mode == "human":
-                    print(f"    {'🟢' if agent_wins else '🔴'} FIN: Out (reward={reward})")
-            
-            elif faults.get('service_fault'):
-                # Faute de service
-                reward = 20.0 if agent_wins else -10.0
-                if self.render_mode == "human":
-                    print(f"    {'🟢' if agent_wins else '🔴'} FIN: Service invalide (reward={reward})")
-            
-            elif faults.get('double_hit'):
-                # Double touche
-                reward = 20.0 if agent_wins else -10.0
-                if self.render_mode == "human":
-                    print(f"    {'🟢' if agent_wins else '🔴'} FIN: Double touche (reward={reward})")
-            
-            else:
-                # Cas par défaut (ne devrait pas arriver)
-                reward = 20.0 if agent_wins else -15.0
-            
-            return reward
+        if self.agent_hits == 0: # priorise la touche de balle
+
+            # === RÉCOMPENSES TERMINALES ===
+            if winner_side is not None:
+                # Déterminer si l'agent a gagné ou perdu
+                agent_wins = (
+                    (winner_side == 'left' and agent_is_left) or
+                    (winner_side == 'right' and not agent_is_left)
+                )
+                
+                # Récompenses selon le type de faute
+                if faults.get('volley_left') or faults.get('volley_right'):
+                    # Faute de volée
+                    reward = 20.0 if agent_wins else -10.0
+                    if self.render_mode == "human":
+                        print(f"    {'🟢' if agent_wins else '🔴'} FIN: Volée (reward={reward})")
+                
+                elif faults.get('double_bounce_left') or faults.get('double_bounce_right'):
+                    # Double rebond - adversaire n'a pas réussi à toucher
+                    reward = 20.0 if agent_wins else -15.0
+                    if self.render_mode == "human":
+                        print(f"    {'🟢' if agent_wins else '🔴'} FIN: Double rebond (reward={reward})")
+                
+                elif faults.get('out'):
+                    # Balle sortie
+                    reward = 20.0 if agent_wins else -15.0
+                    if self.render_mode == "human":
+                        print(f"    {'🟢' if agent_wins else '🔴'} FIN: Out (reward={reward})")
+                
+                elif faults.get('service_fault'):
+                    # Faute de service
+                    reward = 20.0 if agent_wins else -10.0
+                    if self.render_mode == "human":
+                        print(f"    {'🟢' if agent_wins else '🔴'} FIN: Service invalide (reward={reward})")
+                
+                elif faults.get('double_hit'):
+                    # Double touche
+                    reward = 20.0 if agent_wins else -10.0
+                    if self.render_mode == "human":
+                        print(f"    {'🟢' if agent_wins else '🔴'} FIN: Double touche (reward={reward})")
+                
+                else:
+                    # Cas par défaut (ne devrait pas arriver)
+                    reward = 20.0 if agent_wins else -15.0
+                
+                return reward
         
         # === RÉCOMPENSES INTERMÉDIAIRES (jalons) ===
         # Uniquement si le point n'est pas terminé
@@ -665,14 +703,14 @@ class PingPongEnv(gym.Env):
             # === JALON 3 : Proximité avec la balle ===
             if ball_on_agent_side and ball_is_playable:
                 if distance < ZONE_TRES_PROCHE:
-                    reward += 0.02
+                    reward += 0.05
                 elif distance < ZONE_PROCHE:
-                    reward += 0.01
+                    reward += 0.03
                 elif distance < ZONE_MOYENNE:
-                    reward += 0.003
+                    reward += 0.01
             
             # === JALON 4 : Toucher la balle ===
-            if self.pending_hit_reward:
+            if self.pending_hit_reward: # la récompense doit être supérieur aux fautes car on fait souvent des -15 pour la faute donc +30 permet de finir avec +15
                 reward += 30.0
                 self.pending_hit_reward = False
             
@@ -721,7 +759,9 @@ class PingPongEnv(gym.Env):
         
         # Variables utiles
         agent_is_left = (self.agent_side == "left")
-        net_center = WIDTH // 2
+        # Offset adaptatif: +15 si balle va à droite, -15 si elle va à gauche
+        velocity_offset = ADAPTIVE_BOUNDARY_OFFSET if (self.ball_in_play and self.ball and self.ball.vel[0] > 0) else (-ADAPTIVE_BOUNDARY_OFFSET if (self.ball_in_play and self.ball and self.ball.vel[0] < 0) else 0)
+        net_center = WIDTH // 2 + velocity_offset
         paddle_center_x = self.agent_paddle.pos[0] + self.agent_paddle.width / 2
         paddle_center_y = self.agent_paddle.pos[1] + self.agent_paddle.height / 2
         
@@ -744,8 +784,10 @@ class PingPongEnv(gym.Env):
             
             # === NOUVELLES VARIABLES ===
             
-            # Balle de notre côté ?
-            ball_on_agent_side = (ball_x < net_center) if agent_is_left else (ball_x >= net_center)
+            # Balle de notre côté ? (avec offset adaptatif basé sur la vélocité)
+            velocity_offset = ADAPTIVE_BOUNDARY_OFFSET if self.ball.vel[0] > 0 else -ADAPTIVE_BOUNDARY_OFFSET
+            net_center_offset = WIDTH // 2 + velocity_offset
+            ball_on_agent_side = (ball_x < net_center_offset) if agent_is_left else (ball_x >= net_center_offset)
             obs[12] = 1.0 if ball_on_agent_side else -1.0
             
             # Balle vient vers nous ?
@@ -795,10 +837,12 @@ class PingPongEnv(gym.Env):
         return "opponent"
     
     def _is_ball_on_agent_side(self):
-        """Retourne True si la balle est du côté de l'agent."""
+        """Retourne True si la balle est du côté de l'agent (avec offset adaptatif)."""
         if not self.ball_in_play or self.ball is None:
             return False
-        net_center = WIDTH // 2
+        # Offset adaptatif: +ADAPTIVE_BOUNDARY_OFFSET si balle va à droite, -ADAPTIVE_BOUNDARY_OFFSET si elle va à gauche
+        velocity_offset = ADAPTIVE_BOUNDARY_OFFSET if self.ball.vel[0] > 0 else -ADAPTIVE_BOUNDARY_OFFSET
+        net_center = WIDTH // 2 + velocity_offset
         agent_is_left = (self.agent_side == "left")
         ball_x = self.ball.pos[0]
         return (ball_x < net_center) if agent_is_left else (ball_x >= net_center)

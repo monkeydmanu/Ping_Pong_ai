@@ -21,13 +21,14 @@ class Game:
     Utilise PingPongEnv pour la logique du jeu.
     """
     
-    def __init__(self, player1_type="human", player2_type="human"):
+    def __init__(self, player1_type="human", player2_type="human", mouse_control_p1=False):
         """
         Initialise le jeu.
         
         Args:
             player1_type: "human" ou "ai"
             player2_type: "human" ou "ai"
+            mouse_control_p1: Si True, le joueur 1 est contrôlé à la souris
         """
         pygame.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -36,11 +37,12 @@ class Game:
         self.running = True
         
         # Environnement du jeu (gère toute la logique)
-        self.env = PingPongEnv(render_mode=None)
+        self.env = PingPongEnv(render_mode=None, player1_mouse_control=mouse_control_p1)
         
         # Types de joueurs
         self.player1_type = player1_type  # "human" ou "ai"
         self.player2_type = player2_type
+        self.player1_mouse_control = mouse_control_p1  # Contrôle souris du joueur 1
         
         # Affichage
         self.font = pygame.font.Font(None, 36)
@@ -57,6 +59,17 @@ class Game:
         self.last_ball_vel = (0, 0)
         self.last_paddle_vel = (0, 0)
         self.last_spin = 0
+        self.displayed_paddle_vel = (0, 0)  # Vélocité réelle du paddle pour affichage
+        
+        # État de la souris pour joueur 1 (contrôle souris)
+        self.mouse_pos = (WIDTH // 4, HEIGHT // 2)  # Position initiale de la souris
+        self.mouse_buttons = (False, False, False)  # (left, middle, right)
+        
+        # Ancienne position de la raquette agent pour calculer la vélocité
+        self.last_agent_paddle_pos = np.array([WIDTH // 4, HEIGHT // 2], dtype=float)
+        
+        # Historique de vélocité pour lissage (derniers 10 frames)
+        self.agent_paddle_vel_history = []
         
         # Réinitialiser l'environnement
         self.env.reset()
@@ -76,7 +89,11 @@ class Game:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
-        
+            # On ne gère plus la souris ici, voir ci-dessous
+
+        # Met à jour la position de la souris à chaque frame (réactivité maximale)
+        self.mouse_pos = pygame.mouse.get_pos()
+
         # Récupérer les actions des joueurs
         self.action_p1 = self._get_player1_input()
         self.action_p2 = self._get_player2_input()
@@ -86,30 +103,77 @@ class Game:
         if self.player1_type != "human":
             return np.array([0.0, 0.0, 0.0], dtype=np.float32)
         
-        keys = pygame.key.get_pressed()
-        move_x = 0.0
-        move_y = 0.0
-        rotate = 0.0
+        # === MODE SOURIS : Contrôle par la souris ===
+        if self.player1_mouse_control:
+            mouse_x, mouse_y = self.mouse_pos
+            # Centrer la raquette sur la souris
+            new_x = mouse_x - self.env.agent_paddle.width / 2
+            new_y = mouse_y - self.env.agent_paddle.height / 2
+            # Appliquer les limites terrain agent
+            new_x = max(self.env.agent_paddle.x_min, min(new_x, self.env.agent_paddle.x_max - self.env.agent_paddle.width))
+            new_y = max(0, min(new_y, HEIGHT - self.env.agent_paddle.height))
+            
+            # Calculer la vélocité basée sur le déplacement réel entre les deux frames
+            dt = 1.0 / FPS
+            vel_x = (new_x - self.last_agent_paddle_pos[0]) / dt
+            vel_y = (new_y - self.last_agent_paddle_pos[1]) / dt
+            
+            # Ajouter à l'historique et faire une moyenne lissée (derniers 10 frames)
+            self.agent_paddle_vel_history.append(np.array([vel_x, vel_y]))
+            if len(self.agent_paddle_vel_history) > 10:
+                self.agent_paddle_vel_history.pop(0)
+            
+            # Moyenne lissée de la vélocité: moyenne des 10 derniers (ou moins si moins de 10)
+            recent_vels = self.agent_paddle_vel_history[-10:] if self.agent_paddle_vel_history else [np.array([0, 0])]
+            avg_vel = np.mean(recent_vels, axis=0)
+            
+            # Appliquer la nouvelle position et vélocité lissée
+            self.env.agent_paddle.pos[0] = new_x
+            self.env.agent_paddle.pos[1] = new_y
+            self.env.agent_paddle.vel = avg_vel  # Vélocité lissée
+            
+            # Stocker la vélocité réelle pour l'affichage
+            self.displayed_paddle_vel = tuple(avg_vel)
+            
+            # Stocker la position pour le calcul au prochain frame
+            self.last_agent_paddle_pos = np.array([new_x, new_y], dtype=float)
+            
+            # Rotation : clic gauche = gauche, clic droit = droite
+            rotate = 0.0
+            if pygame.mouse.get_pressed()[0]:  # Clic gauche
+                rotate = -1.0
+            elif pygame.mouse.get_pressed()[2]:  # Clic droit
+                rotate = 1.0
+            
+            # Retourner juste la rotation (move_x et move_y = 0, car on gère la position directement)
+            return np.array([0.0, 0.0, rotate], dtype=np.float32)
         
-        # Mouvement vertical (Z=haut, S=bas)
-        if keys[pygame.K_z]:
-            move_y = -1.0
-        elif keys[pygame.K_s]:
-            move_y = 1.0
-        
-        # Mouvement horizontal (Q=gauche, D=droite)
-        if keys[pygame.K_q]:
-            move_x = -1.0
-        elif keys[pygame.K_d]:
-            move_x = 1.0
-        
-        # Rotation (A=gauche, E=droite)
-        if keys[pygame.K_a]:
-            rotate = -1.0
-        elif keys[pygame.K_e]:
-            rotate = 1.0
-        
-        return np.array([move_x, move_y, rotate], dtype=np.float32)
+        # === MODE CLAVIER : Contrôle ZQSD (original) ===
+        else:
+            keys = pygame.key.get_pressed()
+            move_x = 0.0
+            move_y = 0.0
+            rotate = 0.0
+            
+            # Mouvement vertical (Z=haut, S=bas)
+            if keys[pygame.K_z]:
+                move_y = -1.0
+            elif keys[pygame.K_s]:
+                move_y = 1.0
+            
+            # Mouvement horizontal (Q=gauche, D=droite)
+            if keys[pygame.K_q]:
+                move_x = -1.0
+            elif keys[pygame.K_d]:
+                move_x = 1.0
+            
+            # Rotation (A=gauche, E=droite)
+            if keys[pygame.K_a]:
+                rotate = -1.0
+            elif keys[pygame.K_e]:
+                rotate = 1.0
+            
+            return np.array([move_x, move_y, rotate], dtype=np.float32)
     
     def _get_player2_input(self):
         """Récupère l'input du joueur 2 (droite)."""
@@ -165,13 +229,10 @@ class Game:
         if self.message_timer > 0:
             self.message_timer -= 1
         
-        # Debug: mettre à jour les infos affichées
-        self.debug_timer += 1
-        if self.debug_timer >= 30:  # 30 frames = 0.5s à 60fps
-            self.debug_timer = 0
-            if self.env.ball_in_play and self.env.ball:
-                self.last_ball_vel = (self.env.ball.vel[0], self.env.ball.vel[1])
-                self.last_spin = self.env.ball.angular_speed
+        # Mettre à jour les infos de debug en temps réel (chaque frame)
+        if self.env.ball_in_play and self.env.ball:
+            self.last_ball_vel = (self.env.ball.vel[0], self.env.ball.vel[1])
+            self.last_spin = self.env.ball.angular_speed
 
     
     def draw(self):
@@ -193,13 +254,22 @@ class Game:
         # Afficher le score
         self._draw_score()
         
-        # Affichage debug des vitesses (optionnel, en bas)
-        vel_text = f"Balle: vx={self.last_ball_vel[0]:.0f} vy={self.last_ball_vel[1]:.0f}"
-        spin_text = f"Spin: {self.last_spin:.0f}"
-        text_surface = self.font.render(vel_text, True, (255, 255, 255))
-        text_surface2 = self.font.render(spin_text, True, (0, 255, 255))
-        self.screen.blit(text_surface, (10, HEIGHT - 60))
-        self.screen.blit(text_surface2, (10, HEIGHT - 30))
+        # Affichage des infos de la balle (vitesse et spin) en bas à gauche
+        ball_vel_norm = np.linalg.norm(self.last_ball_vel)
+        ball_info = f"Balle: vx={self.last_ball_vel[0]:6.1f} vy={self.last_ball_vel[1]:6.1f} |v|={ball_vel_norm:6.1f}"
+        spin_info = f"Spin: {self.last_spin:6.1f} rad/s"
+        
+        ball_text = self.font.render(ball_info, True, (255, 255, 255))
+        spin_text = self.font.render(spin_info, True, (0, 255, 255))
+        
+        self.screen.blit(ball_text, (10, HEIGHT - 60))
+        self.screen.blit(spin_text, (10, HEIGHT - 30))
+        
+        # Affichage DEBUG souris - Position et vélocité
+        paddle_vel = self.env.agent_paddle.vel if self.env.agent_paddle else [0, 0]
+        mouse_debug = f"Souris: ({self.mouse_pos[0]:.0f}, {self.mouse_pos[1]:.0f}) | Paddle vel: ({paddle_vel[0]:.1f}, {paddle_vel[1]:.1f})"
+        mouse_text_surface = self.font.render(mouse_debug, True, (0, 255, 0))
+        self.screen.blit(mouse_text_surface, (10, 20))
         
         pygame.display.flip()
     

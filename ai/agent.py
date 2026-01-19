@@ -123,12 +123,21 @@ class Agent:
                                                   1 + self.policy_clip) * advantage[batch]
                 actor_loss = -T.min(weighted_probs, weighted_clipped_probs).mean()
 
-                # Loss critique (MSE)
-                returns = advantage[batch] + values[batch]
+                # Loss critique (MSE), sert de baseline pour réduire la variance des gradients, pas à choisir l'action
+                returns = advantage[batch] + values[batch] # proche de la reward cumulée
                 critic_loss = (returns - critic_value) ** 2
                 critic_loss = critic_loss.mean()
+                # Cas 1 – État réellement bon (gagner le point) mais sous-estimé
+                # returns ≫ critic_value → erreur élevée → loss augmente → le critique apprend à monter sa prédiction.
+                # Cas 2 – État réellement mauvais (perdre le point) mais surestimé
+                # returns ≪ critic_value → erreur élevée → loss augmente → le critique apprend à baisser sa prédiction.
+                # Cas 3 – État neutre / transitions courtes (peu de reward)
+                # returns ≈ critic_value → erreur faible → loss faible → ajustements minimes.
+                # Cas 4 – Rewards rares et forts (ping-pong)
+                # Quand un point est gagné/perdu, returns fait un saut (±100) → si le critique ne l’avait pas anticipé, la loss grimpe, forçant une mise à jour importante pour mieux prévoir ces transitions.
 
                 # Loss totale avec bonus d'entropie (0.01 est un coeff standard)
+
                 total_loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy
                 
                 # Backpropagation
@@ -159,4 +168,9 @@ def predict_action(agent, observation, deterministic=False):
         action = dist.sample()
     
     action = T.clamp(action, -1.0, 1.0)
-    return action.squeeze().cpu().detach().numpy()
+    
+    # Convertir vers numpy de manière robuste
+    action_np = action.squeeze().detach()
+    if action_np.is_cuda:
+        action_np = action_np.cpu()
+    return action_np.numpy()

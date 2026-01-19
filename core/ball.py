@@ -68,7 +68,7 @@ def spawn_ball_left(table):
     """Crée une balle au bord gauche de la table (service gauche)."""
     x_table, y_table, w_table, h_table = table.get_rect()
     ball = Ball(
-        x=x_table + 30,  # Bord gauche de la table
+        x=x_table + 100,  # Bord gauche de la table # + 30
         y=y_table - 300,  # Au-dessus de la table
         vx=0,
         vy=0,
