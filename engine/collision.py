@@ -4,7 +4,7 @@ Fonctions de collision balle ↔ raquette / filet / table
 
 import pygame
 import numpy as np
-from config import RESTITUTION, TABLE_Y, VPX_FRAME_MAX, WIDTH
+from config import RESTITUTION, TABLE_Y, VPX_FRAME_MAX, WIDTH, FPS
 
 # a = 0.35 pour de la mousse et 0.22 pour la table
 # v0 = 200 m/s pour la mousse et 250 pour la table
@@ -302,17 +302,9 @@ def check_rect_collision(ball, rectangle, est_mousse, est_table, a, spin_factor=
     if not hit:
         return
 
-    # Éviter les collisions multiples avec la raquette (cooldown de 0.2s = 24 frames à 120fps)
-    if est_mousse and ball.collision_cooldown > 0:
-        return
-
     # Repositionnement pour éviter l'enfoncement
     ball.pos[0] = contact[0] + normal[0] * ball.radius
     ball.pos[1] = contact[1] + normal[1] * ball.radius
-    
-    # Activer le cooldown pour la raquette
-    if est_mousse:
-        ball.collision_cooldown = 24  # 0.2 secondes à 120fps
 
     if face and face.startswith('corner_'):
         # Ancienne logique coin

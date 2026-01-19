@@ -13,7 +13,9 @@ import os
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+import pygame
 from collections import deque
+from config import FPS
 
 from ai.agent import Agent, predict_action
 from ai.environment import PingPongEnv
@@ -206,7 +208,10 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
             action, prob, val = agent.choose_action(observation)
             
             # Exécuter l'action
-            observation_, reward, terminated, info = env.step(action)
+            observation_, terminated, info = env.step(action)
+            
+            # Calculer la récompense pour l'entraînement
+            reward = env.compute_reward(info)
             done = terminated
             
             n_steps += 1
@@ -274,9 +279,9 @@ def train(n_games=1000, N=2048, batch_size=64, n_epochs=10, alpha=0.0003,
     return agent, score_history
 
 
-def play(model_path='models/ppo', num_episodes=5):
+def play_ai_vs_ai(model_path='models/ppo', num_episodes=5):
     """
-    Joue avec un agent entraîné.
+    IA vs IA avec affichage visuel (évaluation sans entraînement).
     
     Args:
         model_path: Chemin vers les modèles sauvegardés
@@ -289,7 +294,8 @@ def play(model_path='models/ppo', num_episodes=5):
         print("   Lance d'abord l'entraînement avec: python train.py")
         return
     
-    env = PingPongEnv(render_mode="human")
+    # Importer Game uniquement quand nécessaire
+    from engine.game import Game
     
     agent = Agent(
         n_actions=3,
@@ -301,33 +307,154 @@ def play(model_path='models/ppo', num_episodes=5):
     agent.load_models()
     print(f"✅ Modèle chargé depuis {model_path}")
     
-    print("=== Mode Jeu ===")
+    print("=== Mode Jeu IA vs IA ===")
+    print("Les deux raquettes sont contrôlées par des IA")
+    
+    game = Game(player1_type="ai", player2_type="ai")
     
     for episode in range(num_episodes):
-        observation, _ = env.reset()
-        total_reward = 0
+        game.env.reset()
+        game.score_left = 0
+        game.score_right = 0
+        
+        steps = 0
         done = False
-        hits = 0
         
-        while not done:
-            # Action déterministe pour le jeu
-            action = predict_action(agent, observation, deterministic=True)
-            observation, reward, terminated, info = env.step(action)
-            total_reward += reward
-            hits = info.get('agent_hits', 0)
-            done = terminated
+        while not done and game.running and steps < 3000:
+            # Gestion des events pour garder la fenêtre réactive (fermeture possible)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    done = True
+                    game.running = False
+                    break
+
+            if not game.running:
+                break
+
+            # IA gauche (agent_paddle) - utilise le modèle entraîné
+            obs = game.env._get_observation()
+            action_p1 = predict_action(agent, obs, deterministic=True)
+            
+            # IA droite (opponent_paddle) - IA simple intégrée
+            action_p2 = game.env._get_opponent_action()
+            
+            # Simuler directement via env (pas de reward car pas d'entraînement)
+            obs, done, info = game.env.step(action_p1, action_p2)
+            game.score_left = info.get('score_left', 0)
+            game.score_right = info.get('score_right', 0)
+            game.point_message = info.get('point_message', '')
+            
+            steps += 1
+            
+            # Afficher visuellement
+            game.draw()
+            game.clock.tick(FPS)
         
-        won = "✓ Gagné" if total_reward > 10 else "✗ Perdu"
-        print(f"Episode {episode + 1}: Reward = {total_reward:.2f} | Hits: {hits} | {won}")
+        if not game.running:
+            break
+        
+        print(f"Episode {episode + 1}: {game.score_left} - {game.score_right}")
     
-    env.close()
+    game.running = False
+    pygame.quit()
+
+
+def play_human_vs_human():
+    """
+    1v1 entre deux joueurs humains avec affichage complet.
+    Joueur 1 (gauche): Z/S (vertical), Q/D (horizontal), A/E (rotation)
+    Joueur 2 (droite): O/L (vertical), K/M (horizontal), I/P (rotation)
+    """
+    from engine.game import Game
+    
+    print("=== Mode Humain vs Humain ===")
+    print("Joueur 1 (gauche): Z/S=vertical, Q/D=horizontal, A/E=rotation")
+    print("Joueur 2 (droite): O/L=vertical, K/M=horizontal, I/P=rotation")
+    
+    game = Game(player1_type="human", player2_type="human")
+    game.run()
+    
+    print("Fin du jeu!")
+
+
+def play_ai_vs_human(model_path='models/ppo'):
+    """
+    IA vs Joueur Humain avec affichage complet.
+    
+    Args:
+        model_path: Chemin vers les modèles sauvegardés
+    """
+    # Vérifier que le modèle existe
+    actor_path = os.path.join(model_path, 'actor_torch_ppo')
+    if not os.path.exists(actor_path):
+        print(f"❌ Erreur: Aucun modèle trouvé dans {model_path}")
+        print("   Lance d'abord l'entraînement avec: python train.py")
+        return
+    
+    from engine.game import Game
+    
+    agent = Agent(
+        n_actions=3,
+        input_dims=18,
+        gamma=0.99,
+        alpha=0.0003,
+        chkpt_dir=model_path
+    )
+    agent.load_models()
+    print(f"✅ Modèle chargé depuis {model_path}")
+    
+    print("=== Mode IA vs Humain ===")
+    print("Vous êtes le joueur 1 (gauche): Z/S=vertical, Q/D=horizontal, A/E=rotation")
+    print("L'IA est le joueur 2 (droite)")
+    
+    game = Game(player1_type="human", player2_type="ai")
+    
+    # On doit modifier le jeu pour utiliser l'agent IA pour player2
+    # Créer une boucle spéciale
+    while game.running:
+        # Garde la fenêtre réactive
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                game.running = False
+        if not game.running:
+            break
+
+        # Action du joueur humain (déjà récupérée par handle_events)
+        game.handle_events()
+        if not game.running:
+            break
+        action_p1 = game.action_p1
+        
+        # Action de l'IA
+        obs = game.env._get_observation()
+        action_p2 = predict_action(agent, obs, deterministic=True)
+        
+        # Mettre à jour l'env (pas de reward car pas d'entraînement)
+        obs, terminated, info = game.env.step(action_p1, action_p2)
+        game.score_left = info.get('score_left', 0)
+        game.score_right = info.get('score_right', 0)
+        
+        if terminated:
+            game.point_message = info.get('point_message', '')
+            game.message_timer = 120
+            game.env.reset()
+        
+        # Décrementer timer
+        if game.message_timer > 0:
+            game.message_timer -= 1
+        
+        game.draw()
+        game.clock.tick(FPS)
+    
+    pygame.quit()
+    print("Fin du jeu!")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='PPO Ping-Pong Training')
     parser.add_argument('--mode', type=str, default='train', 
-                        choices=['train', 'play'],
-                        help='Mode: train ou play')
+                        choices=['train', 'play', 'human', 'ai_vs_human'],
+                        help='Modes: train (IA vs IA entraînement), play (IA vs IA affiché), human (humain vs humain), ai_vs_human (IA vs humain)')
     parser.add_argument('--episodes', type=int, default=1000,
                         help='Nombre d\'épisodes pour l\'entraînement')
     parser.add_argument('--render', action='store_true',
@@ -348,5 +475,21 @@ if __name__ == "__main__":
         should_resume = args.resume and not args.fresh
         train(n_games=args.episodes, render=args.render, live_plot=args.render_plot,
               resume=should_resume, model_path=args.model_path)
-    else:
-        play(model_path=args.model_path, num_episodes=5)
+    elif args.mode == 'play':
+        play_ai_vs_ai(model_path=args.model_path, num_episodes=args.episodes)
+    elif args.mode == 'human':
+        play_human_vs_human()
+    elif args.mode == 'ai_vs_human':
+        play_ai_vs_human(model_path=args.model_path)
+
+# pour train ia vs ia
+# python train.py --mode train --episodes 1000 --render_plot
+
+# pour play ia vs ia 
+# python train.py --mode play --model_path models/ppo --episodes 20
+
+# pour humain vs humain
+# python train.py --mode human
+
+# pour ia vs humain
+# python train.py --mode ai_vs_human --model_path models/ppo

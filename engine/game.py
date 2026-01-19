@@ -1,70 +1,74 @@
 """
-Boucle principale du jeu et gestion des entités.
+Wrapper d'affichage pour le jeu Ping-Pong.
+Gère l'interface visuelle et les inputs clavier.
+La logique du jeu est entièrement gérée par PingPongEnv (environment.py).
 """
 
 import sys
 import os
-# Ajouter le dossier parent au path pour permettre les imports depuis la racine
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import pygame
-from core.ball import Ball, spawn_ball_left, spawn_ball_right
-from config import WIDTH, HEIGHT, GREEN, FPS
+import numpy as np
+from config import WIDTH, HEIGHT, FPS
 from graphics.renderer import draw_background, draw_table, draw_ball, draw_paddle, draw_net
-from core.paddle import Paddle
-from core.net import Net
-from core.table import Table
-from engine.collision import check_ball_paddle, check_ball_net, check_table_collision
+from ai.environment import PingPongEnv
+
 
 class Game:
-    def __init__(self):
+    """
+    Wrapper d'affichage pour le Ping-Pong.
+    Utilise PingPongEnv pour la logique du jeu.
+    """
+    
+    def __init__(self, player1_type="human", player2_type="human"):
+        """
+        Initialise le jeu.
+        
+        Args:
+            player1_type: "human" ou "ai"
+            player2_type: "human" ou "ai"
+        """
         pygame.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption("Ping-Pong 2D - Niveau 1")
+        pygame.display.set_caption("Ping-Pong 2D")
         self.clock = pygame.time.Clock()
         self.running = True
-        self.net = Net()
-        net_center = WIDTH // 2  # Centre du filet
-        # Player à gauche: ne peut pas dépasser le centre du filet
-        self.player = Paddle(50, HEIGHT//2 - 30, x_min=0, x_max=net_center)
-        # Opponent à droite: ne peut pas aller avant le centre du filet
-        self.opponent = Paddle(WIDTH - 60, HEIGHT//2 - 30, x_min=net_center, x_max=WIDTH)
-        self.players = [self.player, self.opponent]
-        self.table = Table()
         
-        # Pour afficher la vitesse
+        # Environnement du jeu (gère toute la logique)
+        self.env = PingPongEnv(render_mode=None)
+        
+        # Types de joueurs
+        self.player1_type = player1_type  # "human" ou "ai"
+        self.player2_type = player2_type
+        
+        # Affichage
         self.font = pygame.font.Font(None, 36)
-        self.score_font = pygame.font.Font(None, 72)  # Police plus grande pour le score
-        self.debug_timer = 0  # compteur pour affichage toutes les 0.5s
+        self.score_font = pygame.font.Font(None, 72)
+        
+        # Scores
+        self.score_left = 0
+        self.score_right = 0
+        self.point_message = ""
+        self.message_timer = 0
+        
+        # Pour le debug
+        self.debug_timer = 0
         self.last_ball_vel = (0, 0)
         self.last_paddle_vel = (0, 0)
         self.last_spin = 0
         
-        # Scores des joueurs
-        self.score_left = 0   # Score du joueur de gauche
-        self.score_right = 0  # Score du joueur de droite
-        self.serving_side = 'left'  # Qui sert ('left' ou 'right')
-        self.point_message = ""  # Message à afficher (ex: "Faute!")
-        self.message_timer = 0   # Timer pour afficher le message
-        self.respawn_timer = 0   # Timer pour respawn automatique
+        # Réinitialiser l'environnement
+        self.env.reset()
 
-        # Balles (vide au départ, appuyer sur R ou T pour lancer)
-        self.balls = []
-        
-        # Tracking du côté de la balle (pour réinitialiser can_hit)
-        # 'left' si la balle est à gauche du filet, 'right' si à droite
-        self.ball_side = None
-
-        # Lancer la première balle après un court délai
-        self.respawn_timer = 60
-
+    
     def run(self):
         """Boucle principale du jeu."""
         while self.running:
             self.handle_events()
             self.update()
             self.draw()
-            self.clock.tick(60)
+            self.clock.tick(FPS)
         pygame.quit()
 
     def handle_events(self):
@@ -72,302 +76,134 @@ class Game:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
-            # Gestion des touches pour spawn de balle (sur KEYDOWN pour éviter répétition)
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_r:
-                    self.spawn_ball_at_left()
-                elif event.key == pygame.K_t:
-                    self.spawn_ball_at_right()
-
-        keys = pygame.key.get_pressed()
-
-        # joueur 1
-
-        if keys[pygame.K_o]:
-            self.opponent.move_up()
-        elif keys[pygame.K_l]:
-            self.opponent.move_down()
-        else:
-            self.opponent.stop_vertical()
-
-        # Mouvement horizontal
-        if keys[pygame.K_k]:
-            self.opponent.move_left()
-        elif keys[pygame.K_m]:
-            self.opponent.move_right()
-        else:
-            self.opponent.stop_horizontal()
-
-        # Rotation
-        if keys[pygame.K_i]:
-            self.opponent.rotate_left(1)
-        if keys[pygame.K_p]:
-            self.opponent.rotate_right(1)
         
-        # joueur 2
-        # Mouvement vertical
+        # Récupérer les actions des joueurs
+        self.action_p1 = self._get_player1_input()
+        self.action_p2 = self._get_player2_input()
+    
+    def _get_player1_input(self):
+        """Récupère l'input du joueur 1 (gauche)."""
+        if self.player1_type != "human":
+            return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        
+        keys = pygame.key.get_pressed()
+        move_x = 0.0
+        move_y = 0.0
+        rotate = 0.0
+        
+        # Mouvement vertical (Z=haut, S=bas)
         if keys[pygame.K_z]:
-            self.player.move_up()
+            move_y = -1.0
         elif keys[pygame.K_s]:
-            self.player.move_down()
-        else:
-            self.player.stop_vertical()
-
-        # Mouvement horizontal
+            move_y = 1.0
+        
+        # Mouvement horizontal (Q=gauche, D=droite)
         if keys[pygame.K_q]:
-            self.player.move_left()
+            move_x = -1.0
         elif keys[pygame.K_d]:
-            self.player.move_right()
-        else:
-            self.player.stop_horizontal()
-
-        # Rotation
+            move_x = 1.0
+        
+        # Rotation (A=gauche, E=droite)
         if keys[pygame.K_a]:
-            self.player.rotate_left(1)
-        if keys[pygame.K_e]:
-            self.player.rotate_right(1)
+            rotate = -1.0
+        elif keys[pygame.K_e]:
+            rotate = 1.0
+        
+        return np.array([move_x, move_y, rotate], dtype=np.float32)
+    
+    def _get_player2_input(self):
+        """Récupère l'input du joueur 2 (droite)."""
+        if self.player2_type != "human":
+            return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        
+        keys = pygame.key.get_pressed()
+        move_x = 0.0
+        move_y = 0.0
+        rotate = 0.0
+        
+        # Mouvement vertical (O=haut, L=bas)
+        if keys[pygame.K_o]:
+            move_y = -1.0
+        elif keys[pygame.K_l]:
+            move_y = 1.0
+        
+        # Mouvement horizontal (K=gauche, M=droite)
+        if keys[pygame.K_k]:
+            move_x = -1.0
+        elif keys[pygame.K_m]:
+            move_x = 1.0
+        
+        # Rotation (I=gauche, P=droite)
+        if keys[pygame.K_i]:
+            rotate = -1.0
+        elif keys[pygame.K_p]:
+            rotate = 1.0
+        
+        return np.array([move_x, move_y, rotate], dtype=np.float32)
 
-    def spawn_ball_at_left(self):
-        """Supprime la balle actuelle et en crée une au bord gauche."""
-        self.balls.clear()
-        self.balls.append(spawn_ball_left(self.table))
-        # Réinitialiser l'état du jeu pour le nouveau point
-        self.ball_side = None
-        for player in self.players:
-            player.can_hit = True
-
-    def spawn_ball_at_right(self):
-        """Supprime la balle actuelle et en crée une au bord droit."""
-        self.balls.clear()
-        self.balls.append(spawn_ball_right(self.table))
-        # Réinitialiser l'état du jeu pour le nouveau point
-        self.ball_side = None
-        for player in self.players:
-            player.can_hit = True
-
+    
     def update(self):
-        """Met à jour l'état du jeu (physique, logique)."""
-        # Timer pour message temporaire
+        """Met à jour l'état du jeu via environment.py."""
+        # Appeler env.step() avec les actions des deux joueurs (pas de reward en mode jeu)
+        obs, terminated, info = self.env.step(
+            self.action_p1,
+            self.action_p2
+        )
+        
+        # Récupérer les scores depuis l'info
+        self.score_left = info.get('score_left', 0)
+        self.score_right = info.get('score_right', 0)
+        
+        # Si le point est terminé
+        if terminated:
+            self.point_message = info.get('point_message', '')
+            self.message_timer = 120  # 2 secondes à 60 fps
+            # Réinitialiser pour le prochain point
+            self.env.reset()
+        
+        # Décrementer le timer du message
         if self.message_timer > 0:
             self.message_timer -= 1
-            
-        # Timer pour respawn automatique
-        if self.respawn_timer > 0:
-            self.respawn_timer -= 1
-            if self.respawn_timer == 0 and not self.balls:
-                if self.serving_side == 'left':
-                    self.spawn_ball_at_left()
-                else:
-                    self.spawn_ball_at_right()
         
-        # Timer pour affichage debug toutes les 0.5s
+        # Debug: mettre à jour les infos affichées
         self.debug_timer += 1
-        if self.debug_timer >= 30:  # 30 frames à 60fps = 0.5s
+        if self.debug_timer >= 30:  # 30 frames = 0.5s à 60fps
             self.debug_timer = 0
-            if self.balls:
-                ball = self.balls[0]
-                self.last_ball_vel = (ball.vel[0], ball.vel[1])
-                self.last_paddle_vel = (self.player.vel[0], self.player.vel[1])
-                self.last_spin = ball.angular_speed
-        
-        # Sub-stepping pour la physique (4x par frame)
-        dt = 1.0 / FPS
-        n_substeps = 4
-        dt_sub = dt / n_substeps
+            if self.env.ball_in_play and self.env.ball:
+                self.last_ball_vel = (self.env.ball.vel[0], self.env.ball.vel[1])
+                self.last_spin = self.env.ball.angular_speed
 
-        for ball in self.balls[:]:
-            for _ in range(n_substeps):
-                ball.update(dt=dt_sub)
-                
-                # === DETECTION BALLE OUT (Table + Marge) ===
-                # Règle stricte : si la balle dépasse la table de 10px, le point est fini.
-                margin = 15
-                table_left_limit = self.table.x - margin
-                table_right_limit = self.table.x + self.table.width + margin
-                
-                ball_out_winner = None
-                ball_out_reason = ""
-                
-                # Sortie à gauche
-                if ball.pos[0] < table_left_limit:
-                    if ball.bounces_left == 0:
-                        # Sortie sans rebond à gauche -> Faute du tireur (celui qui a envoyé vers la gauche = Droite)
-                        ball_out_winner = 'left'
-                        ball_out_reason = "Sortie (Faute Adv.)"
-                    else:
-                        # Rebond valide, mais balle sort -> Le receveur (gauche) a raté
-                        ball_out_winner = 'right'
-                        ball_out_reason = "Sortie (Raté)"
-                            
-                # Sortie à droite
-                elif ball.pos[0] > table_right_limit:
-                    if ball.bounces_right == 0:
-                        # Sortie sans rebond à droite -> Faute du tireur (celui qui a envoyé vers la droite = Gauche)
-                        ball_out_winner = 'right'
-                        ball_out_reason = "Sortie (Faute Adv.)"
-                    else:
-                        # Rebond valide, balle sort -> Le receveur (droite) a raté
-                        ball_out_winner = 'left'
-                        ball_out_reason = "Sortie (Raté)"
-                
-                if ball_out_winner:
-                    self.award_point(ball_out_winner, ball_out_reason)
-                    self.balls.remove(ball)
-                    break # Sortir du sub-stepping
-
-                # Détecter le changement de côté de la balle
-                net_center = WIDTH // 2
-                current_side = 'left' if ball.pos[0] < net_center else 'right'
-                
-                # Si la balle change de côté, réinitialiser can_hit et les compteurs de rebonds
-                if self.ball_side is not None and current_side != self.ball_side:
-                    # Vérifier si le service est valide AVANT de reset
-                    if ball.service is not None:
-                        # Le serveur doit avoir fait rebondir sur son côté avant de passer à l'autre
-                        server_side = ball.service
-                        if server_side == 'left' and ball.bounces_left == 0:
-                            self.award_point('right', "Service invalide!")
-                            self.balls.remove(ball)
-                            break # Sortir du sub-stepping
-                        # Le serveur à droite doit avoir fait rebondir sur son côté (droite) avant de passer à gauche
-                        elif server_side == 'right' and ball.bounces_right == 0:
-                            self.award_point('left', "Service invalide!")
-                            self.balls.remove(ball)
-                            break # Sortir du sub-stepping
-                        ball.service = None  # Service terminé
-                    
-                    for player in self.players:
-                        player.can_hit = True
-                    # Reset le compteur de rebonds du côté qu'on quitte
-                    if self.ball_side == 'left':
-                        ball.bounces_left = 0
-                    else:
-                        ball.bounces_right = 0
-                
-                self.ball_side = current_side
-                
-                # collisions
-                check_table_collision(ball, self.table)
-                check_ball_net(ball, self.net)
-                
-                # Vérifier double rebond (faute)
-                point_scored = self.check_point_scored(ball)
-                if point_scored:
-                    break # Sortir du sub-stepping
-                
-                # collision avec les raquettes
-                for i, player in enumerate(self.players):
-                    old_can_hit = player.can_hit
-                    check_ball_paddle(ball, player, self.screen)
-                    # Si le joueur a frappé la balle
-                    if old_can_hit and not player.can_hit:
-                        # === DETECTION VOLLEY (OBSTRUCTION) ===
-                        from config import TABLE_WIDTH_PX
-                        table_x = (WIDTH - TABLE_WIDTH_PX) // 2
-                        table_left_edge = table_x
-                        table_right_edge = table_x + TABLE_WIDTH_PX
-                        
-                        is_volley = False
-                        if i == 0: # Player (gauche)
-                            # Balle vient de droite, pas de rebond à gauche, au-dessus de la table
-                            if ball.bounces_left == 0 and ball.pos[0] > table_left_edge:
-                                is_volley = True
-                                self.award_point('right', "Obstruction!")
-                        else: # Opponent (droite)
-                            # Balle vient de gauche, pas de rebond à droite, au-dessus de la table
-                            if ball.bounces_right == 0 and ball.pos[0] < table_right_edge:
-                                is_volley = True
-                                self.award_point('left', "Obstruction!")
-                        
-                        if is_volley:
-                            self.balls.remove(ball)
-                            break # Sortir du sub-stepping
-
-                        ball.last_hit_by = 'left' if i == 0 else 'right'
-            
-            # Si la balle a été supprimée (point marqué), on arrête de la traiter
-            if ball not in self.balls:
-                continue
-        
-        for player in self.players:
-            player.update(1.0/FPS)  # dt = 1/120 = 0.0083s par frame
     
-    def check_point_scored(self, ball):
-        """Vérifie si un point est marqué et met à jour le score."""
-        point_for = None  # 'left' ou 'right'
-        reason = ""
-        
-        # Double rebond sur le même côté = point pour l'adversaire
-        if ball.bounces_left >= 2:
-            point_for = 'right'
-            reason = "Double rebond!"
-        elif ball.bounces_right >= 2:
-            point_for = 'left'
-            reason = "Double rebond!"
-        
-        # Note: Les sorties latérales sont gérées directement dans la boucle update
-        # avec la règle stricte (Table + 10px)
-        
-        # Balle sortie par le bas (tombe)
-        elif ball.pos[1] > HEIGHT:
-            if ball.last_hit_by == 'left':
-                point_for = 'right'
-            else:
-                point_for = 'left'
-            reason = "Dans le filet!" if ball.pos[0] > WIDTH//2 - 50 and ball.pos[0] < WIDTH//2 + 50 else "Faute!"
-        
-        if point_for:
-            self.award_point(point_for, reason)
-            self.balls.remove(ball)
-            return True
-        
-        return False
-    
-    def award_point(self, winner, reason):
-        """Attribue un point au gagnant."""
-        if winner == 'left':
-            self.score_left += 1
-        else:
-            self.score_right += 1
-        
-        self.point_message = reason
-        self.message_timer = 120  # 2 secondes à 60 fps
-        
-        # Alterner le service tous les 2 points
-        total_points = self.score_left + self.score_right
-        if total_points % 2 == 0:
-            self.serving_side = 'left' if self.serving_side == 'right' else 'right'
-            
-        # Programmer le respawn automatique
-        self.respawn_timer = 60  # 1 seconde d'attente avant le prochain service
-
     def draw(self):
         """Dessine les éléments à l'écran."""
         draw_background(self.screen)
-        draw_table(self.screen, self.table)
-        for ball in self.balls:
-            draw_ball(self.screen, ball)
-        draw_paddle(self.screen, self.player, (255, 0, 0))
-        draw_paddle(self.screen, self.opponent, (0, 0, 0))
-        draw_net(self.screen, self.net)
+        draw_table(self.screen, self.env.table)
         
-        # === AFFICHAGE DU SCORE ===
-        self.draw_score()
+        # Dessiner la balle
+        if self.env.ball_in_play and self.env.ball:
+            draw_ball(self.screen, self.env.ball)
         
-        # Affichage debug des vitesses à l'écran (en bas)
+        # Dessiner les raquettes
+        draw_paddle(self.screen, self.env.agent_paddle, (255, 0, 0))
+        draw_paddle(self.screen, self.env.opponent_paddle, (0, 0, 0))
+        
+        # Dessiner le filet
+        draw_net(self.screen, self.env.net)
+        
+        # Afficher le score
+        self._draw_score()
+        
+        # Affichage debug des vitesses (optionnel, en bas)
         vel_text = f"Balle: vx={self.last_ball_vel[0]:.0f} vy={self.last_ball_vel[1]:.0f}"
-        paddle_text = f"Raquette: vx={self.last_paddle_vel[0]:.0f} vy={self.last_paddle_vel[1]:.0f}"
         spin_text = f"Spin: {self.last_spin:.0f}"
         text_surface = self.font.render(vel_text, True, (255, 255, 255))
-        text_surface2 = self.font.render(paddle_text, True, (255, 255, 0))
-        text_surface3 = self.font.render(spin_text, True, (0, 255, 255))
-        self.screen.blit(text_surface, (10, HEIGHT - 90))
-        self.screen.blit(text_surface2, (10, HEIGHT - 60))
-        self.screen.blit(text_surface3, (10, HEIGHT - 30))
+        text_surface2 = self.font.render(spin_text, True, (0, 255, 255))
+        self.screen.blit(text_surface, (10, HEIGHT - 60))
+        self.screen.blit(text_surface2, (10, HEIGHT - 30))
         
         pygame.display.flip()
     
-    def draw_score(self):
+    def _draw_score(self):
         """Dessine le tableau de score en haut de l'écran."""
         # Fond semi-transparent pour le score
         score_bg = pygame.Surface((400, 80), pygame.SRCALPHA)
@@ -380,11 +216,6 @@ class Game:
         score_rect = score_surface.get_rect(center=(WIDTH // 2, 40))
         self.screen.blit(score_surface, score_rect)
         
-        # Indicateur de service (petite balle à côté du serveur)
-        service_x = WIDTH // 2 - 80 if self.serving_side == 'left' else WIDTH // 2 + 80
-        pygame.draw.circle(self.screen, (255, 200, 0), (service_x, 40), 8)
-        pygame.draw.circle(self.screen, (255, 140, 0), (service_x, 40), 6)
-        
         # Labels des joueurs
         left_label = self.font.render("Joueur 1", True, (255, 100, 100))
         right_label = self.font.render("Joueur 2", True, (100, 100, 100))
@@ -393,8 +224,12 @@ class Game:
         
         # Message temporaire (ex: "Double rebond!")
         if self.message_timer > 0 and self.point_message:
-            # Effet de fade out
-            alpha = min(255, self.message_timer * 4)
             msg_surface = self.score_font.render(self.point_message, True, (255, 255, 0))
             msg_rect = msg_surface.get_rect(center=(WIDTH // 2, 120))
             self.screen.blit(msg_surface, msg_rect)
+
+
+if __name__ == "__main__":
+    game = Game(player1_type="human", player2_type="human")
+    game.run()
+

@@ -5,18 +5,29 @@ Classe représentant une raquette
 """
 
 import numpy as np
-from config import HEIGHT, WIDTH, RACKET_HEIGHT_PX, RACKET_WIDTH_PX, SPEED_RACKET
+from config import (
+    HEIGHT,
+    WIDTH,
+    RACKET_HEIGHT_PX,
+    RACKET_WIDTH_PX,
+    SPEED_RACKET,
+    FPS,
+    PADDLE_SPEED_SCALE,
+    PADDLE_ROT_SCALE,
+)
 
 class Paddle:
     def __init__(self, x, y, width=RACKET_WIDTH_PX, height=RACKET_HEIGHT_PX, speed=SPEED_RACKET, max_speed=None, x_min=0, x_max=WIDTH):
         self.pos = np.array([x, y], dtype=float)  # Position
         self.width = width
         self.height = height
-        self.speed = speed  # Vitesse maximale de déplacement
-        self.max_speed = max_speed if max_speed else speed  # Vitesse max = speed par défaut
+
+        effective_speed = speed * PADDLE_SPEED_SCALE
+        self.speed = effective_speed  # Vitesse maximale de déplacement (scalée)
+        self.max_speed = (max_speed * PADDLE_SPEED_SCALE) if max_speed else effective_speed
         self.vel = np.array([0.0, 0.0], dtype=float)  # vélocité [vx, vy]
         self.angle = 0  # Rotation libre de la raquette
-        self.acceleration = speed * 30  # Accélération très rapide (quasi instantanée)
+        self.acceleration = effective_speed * 30  # Accélération rapide, cohérente avec la vitesse scalée
         self.friction = 15  # Friction pour ralentir quand on lâche
         self.x_min = x_min  # Limite gauche
         self.x_max = x_max  # Limite droite
@@ -49,31 +60,31 @@ class Paddle:
 
     # Mouvement vertical avec accélération
     def move_up(self):
-        self.vel[1] -= self.acceleration * (1.0 / 120.0)  # accélère vers le haut
+        self.vel[1] -= self.acceleration * (1.0 / FPS)  # accélère vers le haut
 
     def move_down(self):
-        self.vel[1] += self.acceleration * (1.0 / 120.0)  # accélère vers le bas
+        self.vel[1] += self.acceleration * (1.0 / FPS)  # accélère vers le bas
 
     def stop_vertical(self):
         self.vel[1] = 0  # Arrêt instantané
 
     # Mouvement horizontal avec accélération
     def move_left(self):
-        self.vel[0] -= self.acceleration * (1.0 / 120.0)
+        self.vel[0] -= self.acceleration * (1.0 / FPS)
 
     def move_right(self):
-        self.vel[0] += self.acceleration * (1.0 / 120.0)
+        self.vel[0] += self.acceleration * (1.0 / FPS)
 
     def stop_horizontal(self):
         self.vel[0] = 0  # Arrêt instantané
 
     # Rotation, sens trigo
     def rotate_left(self, dt, rotation_speed=6):
-        self.angle -= rotation_speed * dt
+        self.angle -= (rotation_speed * PADDLE_ROT_SCALE) * dt
         self.angle %= 360
 
     def rotate_right(self, dt, rotation_speed=6):
-        self.angle += rotation_speed * dt
+        self.angle += (rotation_speed * PADDLE_ROT_SCALE) * dt
         self.angle %= 360
 
     # Retourne les infos essentielles pour collision/affichage
