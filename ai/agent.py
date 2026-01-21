@@ -17,7 +17,7 @@ class Agent:
     """
     Agent PPO pour actions continues.
     """
-    def __init__(self, n_actions, input_dims, gamma=0.99, alpha=0.0003, 
+    def __init__(self, n_actions, input_dims, gamma=0.997, alpha=0.0003, 
                  gae_lambda=0.95, policy_clip=0.2, batch_size=64, n_epochs=10,
                  chkpt_dir='models/ppo'):
         self.gamma = gamma
@@ -74,6 +74,13 @@ class Agent:
         return action, log_prob, value
 
     def learn(self):
+        # Métriques à retourner
+        total_actor_loss = 0.0
+        total_critic_loss = 0.0
+        total_entropy = 0.0
+        total_std = np.zeros(self.n_actions)
+        num_batches = 0
+        
         for _ in range(self.n_epochs):
             state_arr, action_arr, old_prob_arr, vals_arr,\
             reward_arr, dones_arr, batches = \
@@ -110,18 +117,20 @@ class Agent:
 
                 # Calculer les nouvelles log probs
                 dist = Normal(mu, std)
-                new_probs = dist.log_prob(actions).sum(dim=-1)
-                entropy = dist.entropy().sum(dim=-1).mean()  # Bonus d'entropie
+                new_probs = dist.log_prob(actions).sum(dim=-1) # probabilité sur la nouvelle distribution d'avoir fait cette action
+                entropy = dist.entropy().sum(dim=-1).mean()  # mesure du chaos
+                # entropy élevé -> courbe plate -> exploration
+                # entropy faible -> courbe pointue -> exploitation
                 
                 # Ratio pour PPO
-                prob_ratio = (new_probs - old_probs).exp()
+                prob_ratio = (new_probs - old_probs).exp() # new_probs / old_probs en log space
                 
                 # Loss acteur (PPO clipped)
                 weighted_probs = advantage[batch] * prob_ratio
                 weighted_clipped_probs = T.clamp(prob_ratio, 
                                                   1 - self.policy_clip,
                                                   1 + self.policy_clip) * advantage[batch]
-                actor_loss = -T.min(weighted_probs, weighted_clipped_probs).mean()
+                actor_loss = -T.min(weighted_probs, weighted_clipped_probs).mean() # pour ne pas modifier trop vite la policy
 
                 # Loss critique (MSE), sert de baseline pour réduire la variance des gradients, pas à choisir l'action
                 returns = advantage[batch] + values[batch] # proche de la reward cumulée
@@ -149,8 +158,26 @@ class Agent:
                 T.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
+                
+                # Accumuler les métriques
+                total_actor_loss += actor_loss.item()
+                total_critic_loss += critic_loss.item()
+                total_entropy += entropy.item()
+                total_std += std.mean(dim=0).detach().cpu().numpy()
+                num_batches += 1
 
         self.memory.clear_memory()
+        
+        # Retourner les métriques moyennes
+        metrics = {
+            'actor_loss': total_actor_loss / max(num_batches, 1),
+            'critic_loss': total_critic_loss / max(num_batches, 1),
+            'entropy': total_entropy / max(num_batches, 1),
+            'std_move_x': total_std[0] / max(num_batches, 1),
+            'std_move_y': total_std[1] / max(num_batches, 1),
+            'std_rotation': total_std[2] / max(num_batches, 1)
+        }
+        return metrics
 
 
 def predict_action(agent, observation, deterministic=False):
