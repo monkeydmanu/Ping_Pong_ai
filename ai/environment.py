@@ -62,24 +62,14 @@ class PingPongEnv(gym.Env):
         self.render_mode = render_mode
         self.agent_side = agent_side  # "left" ou "right"
         
-        # Espace d'observation : 18 valeurs continues
-        # [0-1]   Position balle (x, y)
-        # [2-3]   Vitesse balle (vx, vy)
-        # [4]     Spin balle
-        # [5-6]   Position raquette agent (x, y)
-        # [7-8]   Vitesse raquette agent (vx, vy)
-        # [9]     Angle raquette agent
-        # [10-11] Position adversaire (x, y)
-        # [12]    Balle de notre côté ? (1 = oui, -1 = non)
-        # [13]    Balle vient vers nous ? (1 = oui, -1 = non)
-        # [14]    Rebonds sur notre côté (0, 0.5, 1)
-        # [15]    Rebonds côté adverse (0, 0.5, 1)
-        # [16]    Distance balle-raquette normalisée
-        # [17]    Est-ce un service ? (1 = oui, -1 = non)
+        # Espace d'observation : dict avec spatial embeddings
+        # Format retourné: {'ball_idx': int, 'paddle_idx': int, 'continuous': array[11]}
+        # Note: gymnasium peut ne pas supporter directement Dict space, 
+        # mais on gère ça dans l'agent
         self.observation_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(18,),
+            shape=(11,),  # Shape des features continues
             dtype=np.float32
         )
         
@@ -139,7 +129,7 @@ class PingPongEnv(gym.Env):
         
         # Créer les raquettes selon le côté de l'agent
         if self.agent_side == "left":
-            self.agent_paddle = Paddle(265, HEIGHT // 2 - 30, x_min=0, x_max=net_center) # 50
+            self.agent_paddle = Paddle(50, HEIGHT // 2 - 30, x_min=0, x_max=net_center) # 50
             self.opponent_paddle = Paddle(WIDTH - 60, HEIGHT // 2 - 30, x_min=net_center, x_max=WIDTH)
         else:
             self.agent_paddle = Paddle(WIDTH - 60, HEIGHT // 2 - 30, x_min=net_center, x_max=WIDTH)
@@ -675,14 +665,14 @@ class PingPongEnv(gym.Env):
             # === Proximité avec la balle ===
             if ball_on_agent_side and ball_is_playable:
                 if distance < ZONE_TRES_PROCHE:
-                    reward += 1 # 0.05
+                    reward += 5 # 0.05
                 elif distance < ZONE_PROCHE:
-                    reward += 0.5  # 0.03
+                    reward += 1  # 0.03
                 elif distance < ZONE_MOYENNE:
-                    reward += 0.1 # 0.01
+                    reward += 0.5 # 0.01
                 else:
                     if ball_on_agent_side:
-                        reward -= 0.01
+                        reward -= 0.05
             
             # === Toucher la balle ===
             if self.pending_hit_reward: # la récompense doit être supérieur aux fautes car on fait souvent des -15 pour la faute donc +30 permet de finir avec +15
@@ -728,22 +718,101 @@ class PingPongEnv(gym.Env):
         normalized_distance = np.clip(distance / WIDTH, 0.0, 1.0)
         
         return normalized_distance
+    
+    def _position_to_grid_index(self, x, y, grid_size=8):
+        """Convertit une position (x, y) en index de cellule de grille."""
+        # Normaliser les coordonnées dans [0, 1]
+        x_norm = np.clip(x / WIDTH, 0.0, 0.999)
+        y_norm = np.clip(y / HEIGHT, 0.0, 0.999)
+        
+        # Calculer l'index de cellule
+        col = int(x_norm * grid_size)
+        row = int(y_norm * grid_size)
+        
+        return row * grid_size + col
 
     def _get_observation(self):
         """
-        Retourne l'observation normalisée (18 valeurs).
+        Retourne l'observation avec spatial embeddings.
         
-        Structure:
-        [0]   Distance raquette balle
+        Format: dict avec
+            - 'ball_idx': index de cellule grille pour position balle (int 0-63)
+            - 'paddle_idx': index de cellule grille pour position raquette agent (int 0-63)
+            - 'continuous': array de features continues [11 valeurs]:
+                [0-1]   Vitesse balle (vx, vy) normalisée
+                [2]     Spin balle normalisé
+                [3-4]   Vitesse raquette agent (vx, vy) normalisée
+                [5]     Angle raquette agent normalisé
+                [6]     Balle de notre côté ? (1 = oui, -1 = non)
+                [7]     Balle vient vers nous ? (1 = oui, -1 = non)
+                [8]     Rebonds sur notre côté (0, 0.5, 1)
+                [9]     Rebonds côté adverse (0, 0.5, 1)
+                [10]    Est-ce un service ? (1 = oui, -1 = non)
         """
-        obs = np.zeros(1, dtype=np.float32)
+        agent_is_left = (self.agent_side == "left")
+        continuous = np.zeros(11, dtype=np.float32)
         
-        obs[0] = self._get_distance_ball_paddle_normalized(self.agent_paddle)
+        if self.ball_in_play and self.ball is not None:
+            ball_x = self.ball.pos[0]
+            ball_y = self.ball.pos[1]
+            
+            # Index de grille pour la balle
+            ball_idx = self._position_to_grid_index(ball_x, ball_y)
+            
+            # Vitesse balle normalisée
+            max_vel = 1000.0
+            continuous[0] = np.clip(self.ball.vel[0] / max_vel, -1, 1)
+            continuous[1] = np.clip(self.ball.vel[1] / max_vel, -1, 1)
+            
+            # Spin normalisé
+            max_spin = 500.0
+            continuous[2] = np.clip(self.ball.angular_speed / max_spin, -1, 1)
+            
+            # Balle de notre côté ?
+            velocity_offset = ADAPTIVE_BOUNDARY_OFFSET if self.ball.vel[0] > 0 else -ADAPTIVE_BOUNDARY_OFFSET
+            net_center_offset = WIDTH // 2 + velocity_offset
+            ball_on_agent_side = (ball_x < net_center_offset) if agent_is_left else (ball_x >= net_center_offset)
+            continuous[6] = 1.0 if ball_on_agent_side else -1.0
+            
+            # Balle vient vers nous ?
+            ball_coming = (self.ball.vel[0] < 0) if agent_is_left else (self.ball.vel[0] > 0)
+            continuous[7] = 1.0 if ball_coming else -1.0
+            
+            # Rebonds sur notre côté
+            our_bounces = self.ball.bounces_left if agent_is_left else self.ball.bounces_right
+            continuous[8] = min(our_bounces * 0.5, 1.0)
+            
+            # Rebonds côté adverse
+            their_bounces = self.ball.bounces_right if agent_is_left else self.ball.bounces_left
+            continuous[9] = min(their_bounces * 0.5, 1.0)
+            
+            # Est-ce un service ?
+            continuous[10] = 1.0 if self.ball.service is not None else -1.0
+        else:
+            # Balle pas en jeu, position par défaut au centre
+            ball_idx = self._position_to_grid_index(WIDTH // 2, HEIGHT // 2)
+        
+        # Index de grille pour la raquette agent
+        paddle_x = self.agent_paddle.pos[0] + self.agent_paddle.width / 2
+        paddle_y = self.agent_paddle.pos[1] + self.agent_paddle.height / 2
+        paddle_idx = self._position_to_grid_index(paddle_x, paddle_y)
+        
+        # Vitesse raquette agent normalisée
+        max_paddle_vel = 500.0
+        continuous[3] = np.clip(self.agent_paddle.vel[0] / max_paddle_vel, -1, 1)
+        continuous[4] = np.clip(self.agent_paddle.vel[1] / max_paddle_vel, -1, 1)
+        
+        # Angle raquette normalisé
+        continuous[5] = self.agent_paddle.angle / 180.0
+        
+        return {
+            'ball_idx': ball_idx,
+            'paddle_idx': paddle_idx,
+            'continuous': continuous
+        }
 
-        return obs
-
+    # ANCIENNE VERSION (2 features simples) - GARDÉE EN COMMENTAIRE
     # def _get_observation(self):
-    #     """
     #     Retourne l'observation normalisée (18 valeurs).
         
     #     Structure:

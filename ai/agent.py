@@ -47,12 +47,25 @@ class Agent:
         """
         Choisit une action à partir de l'observation.
         
+        Args:
+            observation: dict avec 'ball_idx', 'paddle_idx', 'continuous' ou array simple
+        
         Returns:
             action: np.array de shape (n_actions,)
             log_prob: log probabilité de l'action (somme sur toutes les dimensions)
             value: valeur estimée de l'état
         """
-        state = T.tensor([observation], dtype=T.float).to(self.actor.device)
+        # Préparer l'état pour le réseau
+        if isinstance(observation, dict):
+            # Format avec embeddings
+            state = {
+                'ball_idx': T.tensor([observation['ball_idx']], dtype=T.long).to(self.actor.device),
+                'paddle_idx': T.tensor([observation['paddle_idx']], dtype=T.long).to(self.actor.device),
+                'continuous': T.tensor([observation['continuous']], dtype=T.float).to(self.actor.device)
+            }
+        else:
+            # Format classique (array)
+            state = T.tensor([observation], dtype=T.float).to(self.actor.device)
 
         mu, std = self.actor(state)
         value = self.critic(state)
@@ -106,7 +119,22 @@ class Agent:
             advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
             
             for batch in batches:
-                states = T.tensor(state_arr[batch], dtype=T.float).to(self.actor.device)
+                # Traiter les états (peuvent être des dicts avec embeddings)
+                batch_states = state_arr[batch]
+                if isinstance(batch_states[0], dict):
+                    # Format avec embeddings spatiaux
+                    ball_indices = T.tensor([s['ball_idx'] for s in batch_states], dtype=T.long).to(self.actor.device)
+                    paddle_indices = T.tensor([s['paddle_idx'] for s in batch_states], dtype=T.long).to(self.actor.device)
+                    continuous_features = T.tensor([s['continuous'] for s in batch_states], dtype=T.float).to(self.actor.device)
+                    states = {
+                        'ball_idx': ball_indices,
+                        'paddle_idx': paddle_indices,
+                        'continuous': continuous_features
+                    }
+                else:
+                    # Format classique (array simple)
+                    states = T.tensor(batch_states, dtype=T.float).to(self.actor.device)
+                
                 old_probs = T.tensor(old_prob_arr[batch]).to(self.actor.device)
                 actions = T.tensor(action_arr[batch], dtype=T.float).to(self.actor.device)
 
@@ -145,9 +173,9 @@ class Agent:
                 # Cas 4 – Rewards rares et forts (ping-pong)
                 # Quand un point est gagné/perdu, returns fait un saut (±100) → si le critique ne l’avait pas anticipé, la loss grimpe, forçant une mise à jour importante pour mieux prévoir ces transitions.
 
-                # Loss totale avec bonus d'entropie (0.01 est un coeff standard)
+                # Loss totale avec bonus d'entropie (réduit à 0.001 pour favoriser convergence)
 
-                total_loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy
+                total_loss = actor_loss + 0.5 * critic_loss - 0.001 * entropy
                 
                 # Backpropagation
                 self.actor.optimizer.zero_grad()
@@ -183,8 +211,19 @@ class Agent:
 def predict_action(agent, observation, deterministic=False):
     """
     Prédit une action pour le jeu (sans exploration si deterministic).
+    
+    Args:
+        observation: dict avec 'ball_idx', 'paddle_idx', 'continuous' ou array simple
     """
-    state = T.tensor([observation], dtype=T.float).to(agent.actor.device)
+    # Préparer l'état
+    if isinstance(observation, dict):
+        state = {
+            'ball_idx': T.tensor([observation['ball_idx']], dtype=T.long).to(agent.actor.device),
+            'paddle_idx': T.tensor([observation['paddle_idx']], dtype=T.long).to(agent.actor.device),
+            'continuous': T.tensor([observation['continuous']], dtype=T.float).to(agent.actor.device)
+        }
+    else:
+        state = T.tensor([observation], dtype=T.float).to(agent.actor.device)
     
     mu, std = agent.actor(state)
     

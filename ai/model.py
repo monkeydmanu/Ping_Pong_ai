@@ -1,6 +1,7 @@
 """
 Réseaux de neurones pour PPO (Acteur-Critique).
 Adapté pour actions continues avec distribution Gaussienne.
+Utilise des embeddings spatiaux pour les positions.
 """
 
 import os
@@ -11,18 +12,32 @@ import torch.optim as optim
 
 class ActorNetwork(nn.Module):
     """
-    Réseau Acteur pour actions continues.
+    Réseau Acteur pour actions continues avec spatial embeddings.
     Produit la moyenne (mu) des actions, sigma est appris séparément.
     """
     def __init__(self, n_actions, input_dims, alpha,
-            fc1_dims=256, fc2_dims=256, chkpt_dir='models/ppo'):
+            fc1_dims=256, fc2_dims=256, chkpt_dir='models/ppo',
+            use_embeddings=True, grid_size=8, embed_dim=16):
         super(ActorNetwork, self).__init__()
 
         self.checkpoint_file = os.path.join(chkpt_dir, 'actor_torch_ppo')
+        self.use_embeddings = use_embeddings
+        
+        if use_embeddings:
+            # Embeddings pour les positions spatiales (grille 8x8 = 64 cellules)
+            num_cells = grid_size * grid_size
+            self.ball_embedding = nn.Embedding(num_cells, embed_dim)
+            self.paddle_embedding = nn.Embedding(num_cells, embed_dim)
+            
+            # Dimension totale après embeddings : 2*embed_dim + features continues
+            # input_dims doit contenir le nombre de features continues (pas les indices)
+            total_input_dims = 2 * embed_dim + input_dims
+        else:
+            total_input_dims = input_dims
         
         # Réseau pour la moyenne des actions
         self.actor = nn.Sequential(
-            nn.Linear(input_dims, fc1_dims),
+            nn.Linear(total_input_dims, fc1_dims),
             nn.ReLU(),
             nn.Linear(fc1_dims, fc2_dims),
             nn.ReLU(),
@@ -31,7 +46,7 @@ class ActorNetwork(nn.Module):
         )
         
         # Log de l'écart-type (appris)
-        # Initialisé à 0 -> sigma = exp(0) = 1
+        # Initialisé à -1 -> sigma = exp(-1) ≈ 0.37 (exploration réduite au départ)
         self.log_std = nn.Parameter(T.zeros(n_actions))
 
         self.optimizer = optim.Adam(self.parameters(), lr=alpha)
@@ -41,10 +56,30 @@ class ActorNetwork(nn.Module):
     def forward(self, state):
         """
         Retourne la moyenne et l'écart-type de la distribution.
+        
+        Args:
+            state: Si use_embeddings=True, attend un dict avec:
+                   {'ball_idx': tensor, 'paddle_idx': tensor, 'continuous': tensor}
+                   Sinon, attend un tensor simple.
         """
-        mu = self.actor(state)
+        if self.use_embeddings:
+            # Extraire les indices et features continues
+            ball_idx = state['ball_idx'].long()
+            paddle_idx = state['paddle_idx'].long()
+            continuous_features = state['continuous']
+            
+            # Obtenir les embeddings
+            ball_embed = self.ball_embedding(ball_idx)
+            paddle_embed = self.paddle_embedding(paddle_idx)
+            
+            # Concaténer tout
+            x = T.cat([ball_embed, paddle_embed, continuous_features], dim=-1)
+        else:
+            x = state
+        
+        mu = self.actor(x)
         # Clamp log_std pour éviter des valeurs extrêmes
-        log_std = T.clamp(self.log_std, -20, 2)
+        log_std = T.clamp(self.log_std, -20, 1)
         std = log_std.exp().expand_as(mu)
         
         return mu, std
@@ -73,16 +108,27 @@ class ActorNetwork(nn.Module):
 
 class CriticNetwork(nn.Module):
     """
-    Réseau Critique - estime la valeur V(s).
+    Réseau Critique avec spatial embeddings - estime la valeur V(s).
     """
     def __init__(self, input_dims, alpha, fc1_dims=256, fc2_dims=256,
-            chkpt_dir='models/ppo'):
+            chkpt_dir='models/ppo', use_embeddings=True, grid_size=8, embed_dim=16):
         super(CriticNetwork, self).__init__()
 
         self.checkpoint_file = os.path.join(chkpt_dir, 'critic_torch_ppo')
+        self.use_embeddings = use_embeddings
+        
+        if use_embeddings:
+            # Embeddings pour les positions spatiales
+            num_cells = grid_size * grid_size
+            self.ball_embedding = nn.Embedding(num_cells, embed_dim)
+            self.paddle_embedding = nn.Embedding(num_cells, embed_dim)
+            
+            total_input_dims = 2 * embed_dim + input_dims
+        else:
+            total_input_dims = input_dims
         
         self.critic = nn.Sequential(
-            nn.Linear(input_dims, fc1_dims),
+            nn.Linear(total_input_dims, fc1_dims),
             nn.ReLU(),
             nn.Linear(fc1_dims, fc2_dims),
             nn.ReLU(),
@@ -94,7 +140,28 @@ class CriticNetwork(nn.Module):
         self.to(self.device)
 
     def forward(self, state):
-        value = self.critic(state)
+        """
+        Args:
+            state: Si use_embeddings=True, attend un dict avec:
+                   {'ball_idx': tensor, 'paddle_idx': tensor, 'continuous': tensor}
+                   Sinon, attend un tensor simple.
+        """
+        if self.use_embeddings:
+            # Extraire les indices et features continues
+            ball_idx = state['ball_idx'].long()
+            paddle_idx = state['paddle_idx'].long()
+            continuous_features = state['continuous']
+            
+            # Obtenir les embeddings
+            ball_embed = self.ball_embedding(ball_idx)
+            paddle_embed = self.paddle_embedding(paddle_idx)
+            
+            # Concaténer tout
+            x = T.cat([ball_embed, paddle_embed, continuous_features], dim=-1)
+        else:
+            x = state
+        
+        value = self.critic(x)
         return value
 
     def save_checkpoint(self):

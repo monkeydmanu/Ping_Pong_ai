@@ -338,10 +338,10 @@ def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
         clock = pygame.time.Clock()
     
     # Créer l'agent
-    # Observation: 18 valeurs, Actions: 3 valeurs continues
+    # Observation: embeddings (2x16) + 11 features continues = 43 total
     agent = Agent(
         n_actions=3,          # move_x, move_y, rotate
-        input_dims=1,        # taille de l'observation (18 variables)
+        input_dims=11,        # nombre de features continues (pas les indices d'embedding)
         gamma=gamma,          # Paramètre configurable (0.98 par défaut)
         alpha=alpha,
         gae_lambda=0.95,
@@ -629,7 +629,7 @@ def play_ai_vs_ai(model_path='models/ppo', num_episodes=5, vs_trained=False):
     
     agent_left = Agent(
         n_actions=3,
-        input_dims=1,
+        input_dims=11,
         gamma=0.99,
         alpha=0.0003,
         chkpt_dir=model_path
@@ -642,7 +642,7 @@ def play_ai_vs_ai(model_path='models/ppo', num_episodes=5, vs_trained=False):
     if vs_trained:
         agent_right = Agent(
             n_actions=3,
-            input_dims=1,
+            input_dims=11,
             gamma=0.99,
             alpha=0.0003,
             chkpt_dir=model_path
@@ -759,7 +759,7 @@ def play_ai_vs_human(model_path='models/ppo', mouse_control_p1=False):
     
     agent = Agent(
         n_actions=3,
-        input_dims=1,
+        input_dims=11,
         gamma=0.99,
         alpha=0.0003,
         chkpt_dir=model_path
@@ -865,8 +865,8 @@ if __name__ == "__main__":
 # python train.py --mode train --render_plot
 
 # # Personnaliser le nombre d'épisodes
-# python train.py --mode train --episodes 500
-# python train.py --mode train --episodes 2000
+# python train.py --mode train --episodes 500 --resume
+# python train.py --mode train --episodes 2000 --resume
 
 # # Combiner options
 # python train.py --mode train --episodes 1000 --render --render_plot
