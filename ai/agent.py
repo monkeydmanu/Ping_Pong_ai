@@ -19,7 +19,7 @@ class Agent:
     """
     def __init__(self, n_actions, input_dims, gamma=0.997, alpha=0.0003, 
                  gae_lambda=0.95, policy_clip=0.2, batch_size=64, n_epochs=10,
-                 chkpt_dir='models/ppo'):
+                 chkpt_dir='models/ppo', debug_adv=False):
         self.gamma = gamma
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
@@ -29,6 +29,8 @@ class Agent:
         self.actor = ActorNetwork(n_actions, input_dims, alpha, chkpt_dir=chkpt_dir)
         self.critic = CriticNetwork(input_dims, alpha, chkpt_dir=chkpt_dir)
         self.memory = PPOMemory(batch_size)
+        # Debug des avantages (GAE) pour comprendre le signal d'apprentissage
+        self.debug_adv = debug_adv
        
     def remember(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -48,7 +50,7 @@ class Agent:
         Choisit une action à partir de l'observation.
         
         Args:
-            observation: dict avec 'ball_idx', 'paddle_idx', 'continuous' ou array simple
+            observation: dict avec 'ball_idx', 'paddle_idx', 'angle_idx', 'continuous' ou array simple
         
         Returns:
             action: np.array de shape (n_actions,)
@@ -61,6 +63,7 @@ class Agent:
             state = {
                 'ball_idx': T.tensor([observation['ball_idx']], dtype=T.long).to(self.actor.device),
                 'paddle_idx': T.tensor([observation['paddle_idx']], dtype=T.long).to(self.actor.device),
+                'angle_idx': T.tensor([observation['angle_idx']], dtype=T.long).to(self.actor.device),
                 'continuous': T.tensor([observation['continuous']], dtype=T.float).to(self.actor.device)
             }
         else:
@@ -117,7 +120,7 @@ class Agent:
 
             # Normalisation des avantages (Crucial pour la stabilité)
             advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
-            
+
             for batch in batches:
                 # Traiter les états (peuvent être des dicts avec embeddings)
                 batch_states = state_arr[batch]
@@ -125,10 +128,12 @@ class Agent:
                     # Format avec embeddings spatiaux
                     ball_indices = T.tensor([s['ball_idx'] for s in batch_states], dtype=T.long).to(self.actor.device)
                     paddle_indices = T.tensor([s['paddle_idx'] for s in batch_states], dtype=T.long).to(self.actor.device)
+                    angle_indices = T.tensor([s['angle_idx'] for s in batch_states], dtype=T.long).to(self.actor.device)
                     continuous_features = T.tensor([s['continuous'] for s in batch_states], dtype=T.float).to(self.actor.device)
                     states = {
                         'ball_idx': ball_indices,
                         'paddle_idx': paddle_indices,
+                        'angle_idx': angle_indices,
                         'continuous': continuous_features
                     }
                 else:
@@ -173,9 +178,8 @@ class Agent:
                 # Cas 4 – Rewards rares et forts (ping-pong)
                 # Quand un point est gagné/perdu, returns fait un saut (±100) → si le critique ne l’avait pas anticipé, la loss grimpe, forçant une mise à jour importante pour mieux prévoir ces transitions.
 
-                # Loss totale avec bonus d'entropie (réduit à 0.001 pour favoriser convergence)
-
-                total_loss = actor_loss + 0.5 * critic_loss - 0.001 * entropy
+                # Loss totale sans bonus d'entropie (laisser l'actor loss réduire la variance quand utile)
+                total_loss = actor_loss + 0.5 * critic_loss
                 
                 # Backpropagation
                 self.actor.optimizer.zero_grad()

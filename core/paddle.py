@@ -34,13 +34,20 @@ class Paddle:
         self.can_hit = True  # Booléen pour savoir si la raquette peut toucher la balle
 
     # Mise à jour de la position selon la vélocité et le dt
-    def update(self, dt):
-        # Limite la vitesse au max
+    def update(self, dt, speed_factor=1.0):
+        """Met à jour la position de la raquette.
+        
+        Args:
+            dt: Temps écoulé
+            speed_factor: Facteur de curriculum (0.5 = lent, 1.0 = normal)
+        """
+        # Limiter la vitesse au max
         speed_magnitude = np.linalg.norm(self.vel)
         if speed_magnitude > self.max_speed:
             self.vel = self.vel / speed_magnitude * self.max_speed
         
-        self.pos += self.vel * dt
+        # Appliquer speed_factor à la vélocité pour curriculum
+        self.pos += self.vel * dt * speed_factor
 
         # Limite verticale pour ne pas sortir de l'écran
         if self.pos[1] < 0:

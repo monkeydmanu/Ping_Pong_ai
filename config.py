@@ -50,7 +50,10 @@ MAGNUS_COEFFICIENT = 0.5    # coefficient de lift (Cl) — empirique, ajustable
 DRAG_COEFFICIENT = 0.4      # coefficient de traînée (Cd) — pour une sphère lisse
 
 # --- Détection de côté adaptative ---
-ADAPTIVE_BOUNDARY_OFFSET = 15  # pixels — hystérésis pour éviter les oscillations à la limite centrale
+ADAPTIVE_BOUNDARY_OFFSET = 20  # pixels — hystérésis pour éviter les oscillations à la limite centrale
+# --- Marge de détection OUT sans rebond ---
+OUT_MARGIN = 12  # pixels — marge autour de la table pour détecter une sortie sans rebond adverse
+
 
 # --- Constante de ping pong de vitesse utile --- 
 V_MAX_REEL = 120 # m/s

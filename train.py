@@ -29,7 +29,7 @@ except ImportError:
 
 
 def save_training_state(checkpoint_dir, episode, all_rewards, all_entropy, all_std, 
-                        all_critic_loss, score_history, best_score):
+                        all_critic_loss, score_history, best_score, training_phase=0):
     """Sauvegarde l'état complet de l'entraînement en mémoire."""
     os.makedirs(checkpoint_dir, exist_ok=True)
     
@@ -41,6 +41,7 @@ def save_training_state(checkpoint_dir, episode, all_rewards, all_entropy, all_s
         'all_critic_loss': all_critic_loss,
         'score_history': score_history,
         'best_score': best_score,
+        'training_phase': training_phase,  # Phase de curriculum
     }
     
     checkpoint_file = os.path.join(checkpoint_dir, 'training_state.pkl')
@@ -306,8 +307,8 @@ def update_live_plot(fig, ax1, ax2, scores, update_freq=10):
     fig.canvas.draw()
     fig.canvas.flush_events()
 
-
-def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
+# alpha=0.0003
+def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
           render=False, save_best=True, live_plot=True, plot_first_episode=True,
           resume=False, model_path='models/ppo', gamma=0.98):
     """
@@ -338,17 +339,18 @@ def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
         clock = pygame.time.Clock()
     
     # Créer l'agent
-    # Observation: embeddings (2x16) + 11 features continues = 43 total
+    # Observation: embeddings (3x16) + 10 features continues = 58 total
     agent = Agent(
         n_actions=3,          # move_x, move_y, rotate
-        input_dims=11,        # nombre de features continues (pas les indices d'embedding)
+        input_dims=10,        # nombre de features continues (3 embeddings gérés séparément: ball, paddle, angle)
         gamma=gamma,          # Paramètre configurable (0.98 par défaut)
         alpha=alpha,
         gae_lambda=0.95,
         policy_clip=0.2,
         batch_size=batch_size,
         n_epochs=n_epochs,
-        chkpt_dir=model_path
+        chkpt_dir=model_path,
+        debug_adv=True
     )
     
     # Charger le modèle existant si resume=True
@@ -404,6 +406,20 @@ def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
                       'std_rotation': [], 'critic_loss': []}
     episode_learn_count = 0
     
+    # Tracking par phase pour afficher les stats
+    phase_stats = {0: {'wins': 0, 'losses': 0}, 
+                   1: {'wins': 0, 'losses': 0}, 
+                   2: {'wins': 0, 'losses': 0}, 
+                   3: {'wins': 0, 'losses': 0}}
+    # Gamma progressif par phase (plus la phase est avancée, plus on regarde loin)
+    # Calculs: γ^300 doit rester significatif pour relier cause et effet
+    # Phase 0 (~80 steps): γ=0.995 → γ^80=0.67, γ^100=0.61
+    # Phase 1 (~150 steps): γ=0.996 → γ^150=0.74, γ^200=0.67
+    # Phase 2 (~350 steps): γ=0.998 → γ^300=0.74, γ^350=0.70
+    # Phase 3 (long): γ=0.9985 → γ^400=0.82, γ^500=0.78
+    phase_gamma = {0: 0.995, 1: 0.997, 2: 0.998, 3: 0.9985} # 0: 0.995, 1: 0.996, 2: 0.998, 3: 0.9985
+    last_phase = -1
+    
     # Setup live plot
     fig, ax1, ax2 = None, None, None
     if live_plot:
@@ -422,6 +438,13 @@ def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
     print("=" * 50)
 
     for i in range(start_episode, start_episode + n_games):
+        # === CURRICULUM LEARNING: Mettre à jour la phase ===
+        env.set_episode_count(i)
+        current_phase = env.training_phase
+        # Adapter gamma selon la phase (plus on progresse, plus on anticipe loin)
+        if current_phase in phase_gamma:
+            agent.gamma = phase_gamma[current_phase]
+        
         observation, _ = env.reset()
         done = False
         score = 0
@@ -429,6 +452,32 @@ def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
         episode_hits = 0
         
         last_info = None
+        
+        # Afficher la transition de phase (sauter si aucune phase précédente)
+        if i > 0 and last_phase >= 0 and current_phase != last_phase:
+            phase_names = ["Phase 0: Balle lente proche", "Phase 1: Balle modérée", 
+                          "Phase 2: Balle normale", "Phase 3: Adversaire compétent"]
+            
+            # Afficher les stats de la phase précédente
+            prev_phase = last_phase
+            wins = phase_stats[prev_phase]['wins']
+            losses = phase_stats[prev_phase]['losses']
+            total = wins + losses
+            win_pct = (wins / total * 100) if total > 0 else 0
+            
+            print(f"\n{'='*60}")
+            print(f"📊 FIN {phase_names[prev_phase]}")
+            print(f"{'='*60}")
+            print(f"Wins: {wins} | Losses: {losses} | Total: {total} | Win Rate: {win_pct:.1f}%")
+            print(f"Gamma utilisé: {phase_gamma.get(prev_phase, gamma):.3f}")
+            print(f"{'='*60}\n")
+            
+            # Reset stats pour la nouvelle phase
+            phase_stats[current_phase] = {'wins': 0, 'losses': 0}
+            
+            print(f"🎓 TRANSITION: {phase_names[current_phase]} (Episode {i}) | Gamma={phase_gamma.get(current_phase, gamma):.3f}\n")
+        
+        last_phase = current_phase
 
         while not done:
             # Gérer les événements pygame uniquement si render est activé ET pygame existe
@@ -545,13 +594,18 @@ def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
         episode_winner = env.point_winner_side
         if episode_winner == 'left' and env.agent_side == 'left':
             won = "✓"
+            phase_stats[current_phase]['wins'] += 1
         elif episode_winner == 'right' and env.agent_side == 'right':
             won = "✓"
+            phase_stats[current_phase]['wins'] += 1
         else:
             won = "✗"
+            phase_stats[current_phase]['losses'] += 1
 
         # Afficher la progression
-        print(f'Ep {i+1:4d} | Score: {score:7.1f} | Avg: {avg_score:7.1f} | '
+        phase_names = {0: "🟦", 1: "🟩", 2: "🟨", 3: "🟥"}  # Couleurs pour phases
+        phase_indicator = phase_names.get(current_phase, "⚪")
+        print(f'Ep {i+1:4d} [{phase_indicator} P{current_phase}] | Score: {score:7.1f} | Avg: {avg_score:7.1f} | '
               f'Hits: {episode_hits} | Won: {won} | Steps: {len(episode_rewards):3d}')
 
         # Log détaillé de fin d'épisode (faute / vainqueur) pour debug même sans render
@@ -575,7 +629,8 @@ def train(n_games=1000, N=512, batch_size=64, n_epochs=15, alpha=0.0003,
                 all_std=all_std,
                 all_critic_loss=all_critic_loss,
                 score_history=score_history,
-                best_score=best_score
+                best_score=best_score,
+                training_phase=current_phase  # Sauvegarder la phase
             )
     
     # Fermer le plot interactif
@@ -629,7 +684,7 @@ def play_ai_vs_ai(model_path='models/ppo', num_episodes=5, vs_trained=False):
     
     agent_left = Agent(
         n_actions=3,
-        input_dims=11,
+        input_dims=10,
         gamma=0.99,
         alpha=0.0003,
         chkpt_dir=model_path
@@ -642,7 +697,7 @@ def play_ai_vs_ai(model_path='models/ppo', num_episodes=5, vs_trained=False):
     if vs_trained:
         agent_right = Agent(
             n_actions=3,
-            input_dims=11,
+            input_dims=10,
             gamma=0.99,
             alpha=0.0003,
             chkpt_dir=model_path
@@ -759,7 +814,7 @@ def play_ai_vs_human(model_path='models/ppo', mouse_control_p1=False):
     
     agent = Agent(
         n_actions=3,
-        input_dims=11,
+        input_dims=10,
         gamma=0.99,
         alpha=0.0003,
         chkpt_dir=model_path
@@ -869,7 +924,7 @@ if __name__ == "__main__":
 # python train.py --mode train --episodes 2000 --resume
 
 # # Combiner options
-# python train.py --mode train --episodes 1000 --render --render_plot
+# python train.py --mode train --episodes 10 --render --resume
 
 # # Démarrer un nouvel entraînement (oublier ancien modèle)
 # python train.py --mode train --fresh

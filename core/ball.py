@@ -20,13 +20,19 @@ class Ball:
         self.last_hit_by = None  # 'left' ou 'right' - qui a frappé en dernier
         self.service = None  # None, 'left', ou 'right' - côté qui serve, None quand service est terminé
 
-    def update(self, dt=None):
-        """Met à jour la position et la vitesse de la balle avec effet Magnus et traînée."""
+    def update(self, dt=None, speed_factor=1.0):
+        """Met à jour la position et la vitesse de la balle avec effet Magnus et traînée.
+        
+        Args:
+            dt: Temps écoulé (1/FPS si None)
+            speed_factor: Facteur de curriculum (0.5 = balle lente, 1.0 = normale)
+        """
         if dt is None:
             dt = 1.0 / FPS  # Temps réel par frame (1/120 = 0.0083s)
 
         # Échelle globale pour ralentir ou accélérer la physique de la balle
-        dt_scaled = dt * BALL_SPEED_SCALE
+        # Appliquer speed_factor ici pour curriculum learning
+        dt_scaled = dt * BALL_SPEED_SCALE * speed_factor
         
         # Vitesse en pixels/s pour calculer la norme
         speed_px = np.linalg.norm(self.vel)
@@ -69,7 +75,7 @@ def spawn_ball_left(table):
     x_table, y_table, w_table, h_table = table.get_rect()
     ball = Ball(
         x=x_table + 100,  # Bord gauche de la table # + 30
-        y=y_table - 300,  # Au-dessus de la table
+        y=y_table - 400,  # Au-dessus de la table
         vx=0,
         vy=0,
         angular_speed=0
@@ -83,7 +89,7 @@ def spawn_ball_right(table):
     x_table, y_table, w_table, h_table = table.get_rect()
     ball = Ball(
         x=x_table + w_table - 30,  # Bord droit de la table
-        y=y_table - 300,  # Au-dessus de la table
+        y=y_table - 400,  # Au-dessus de la table
         vx=0,
         vy=0,
         angular_speed=0
