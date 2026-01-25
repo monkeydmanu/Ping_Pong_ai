@@ -29,7 +29,8 @@ except ImportError:
 
 
 def save_training_state(checkpoint_dir, episode, all_rewards, all_entropy, all_std, 
-                        all_critic_loss, score_history, best_score, training_phase=0):
+                        all_critic_loss, all_values, score_history, best_score, training_phase=0, 
+                        learn_call_count=0):
     """Sauvegarde l'état complet de l'entraînement en mémoire."""
     os.makedirs(checkpoint_dir, exist_ok=True)
     
@@ -39,9 +40,11 @@ def save_training_state(checkpoint_dir, episode, all_rewards, all_entropy, all_s
         'all_entropy': all_entropy,
         'all_std': all_std,
         'all_critic_loss': all_critic_loss,
+        'all_values': all_values,  # Mean critic values per learn
         'score_history': score_history,
         'best_score': best_score,
         'training_phase': training_phase,  # Phase de curriculum
+        'learn_call_count': learn_call_count,  # Nombre d'appels à learn()
     }
     
     checkpoint_file = os.path.join(checkpoint_dir, 'training_state.pkl')
@@ -99,7 +102,7 @@ def plot_century_metrics(episode_range, rewards_history, entropy_history,
         rewards_history: liste des rewards totaux par épisode
         entropy_history: liste des entropies moyennes par épisode
         std_history: dict avec 'move_x', 'move_y', 'rotation' - listes de std moyens
-        critic_loss_history: liste des critic loss par épisode
+        critic_loss_history: liste des critic loss par learn
     """
     os.makedirs(save_dir, exist_ok=True)
     
@@ -120,30 +123,31 @@ def plot_century_metrics(episode_range, rewards_history, entropy_history,
     ax1.set_ylabel('Reward Total')
     ax1.grid(True, alpha=0.3)
     
-    # 2. Entropy (mesure d'exploration)
+    # 2. Entropy (mesure d'exploration) - LEARN CALLS en abscisse
     ax2 = axes[0, 1]
-    ax2.plot(episodes, entropy_history, 'g-', alpha=0.7, linewidth=1)
-    ax2.set_title('Entropy (Exploration)', fontsize=12, fontweight='bold')
-    ax2.set_xlabel('Episode')
+    learn_calls = list(range(1, len(entropy_history) + 1))
+    ax2.plot(learn_calls, entropy_history, 'g-', alpha=0.7, linewidth=1)
+    ax2.set_title('Entropy par Learn Call', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Learn Call')
     ax2.set_ylabel('Entropy')
     ax2.grid(True, alpha=0.3)
     
-    # 3. Standard Deviation par action (exploration)
+    # 3. Standard Deviation par action - LEARN CALLS en abscisse
     ax3 = axes[1, 0]
-    ax3.plot(episodes, std_history['move_x'], 'r-', alpha=0.7, linewidth=1, label='Move X')
-    ax3.plot(episodes, std_history['move_y'], 'b-', alpha=0.7, linewidth=1, label='Move Y')
-    ax3.plot(episodes, std_history['rotation'], 'orange', alpha=0.7, linewidth=1, label='Rotation')
-    ax3.set_title('Std Moyen par Action (Exploration)', fontsize=12, fontweight='bold')
-    ax3.set_xlabel('Episode')
+    ax3.plot(learn_calls, std_history['move_x'], 'r-', alpha=0.7, linewidth=1, label='Move X')
+    ax3.plot(learn_calls, std_history['move_y'], 'b-', alpha=0.7, linewidth=1, label='Move Y')
+    ax3.plot(learn_calls, std_history['rotation'], 'orange', alpha=0.7, linewidth=1, label='Rotation')
+    ax3.set_title('Std par Learn Call', fontsize=12, fontweight='bold')
+    ax3.set_xlabel('Learn Call')
     ax3.set_ylabel('Standard Deviation')
     ax3.legend()
     ax3.grid(True, alpha=0.3)
     
-    # 4. Critic Loss
+    # 4. Critic Loss - LEARN CALLS en abscisse
     ax4 = axes[1, 1]
-    ax4.plot(episodes, critic_loss_history, 'purple', alpha=0.7, linewidth=1)
-    ax4.set_title('Critic Loss', fontsize=12, fontweight='bold')
-    ax4.set_xlabel('Episode')
+    ax4.plot(learn_calls, critic_loss_history, 'purple', alpha=0.7, linewidth=1)
+    ax4.set_title('Critic Loss par Learn Call', fontsize=12, fontweight='bold')
+    ax4.set_xlabel('Learn Call')
     ax4.set_ylabel('Loss')
     ax4.grid(True, alpha=0.3)
     
@@ -155,22 +159,23 @@ def plot_century_metrics(episode_range, rewards_history, entropy_history,
     print(f"\n📊 Métriques du siècle sauvegardées: {filename}")
 
 
-def plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, save_dir='plots'):
-    """Trace le bilan final de l'entraînement avec toutes les métriques sur tous les épisodes.
+def plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, all_values, save_dir='plots'):
+    """Trace le bilan final avec rewards par épisode et métriques par learn.
     
     Args:
         all_rewards: liste des rewards totaux par épisode (valeurs réelles)
-        all_entropy: liste des entropies moyennes par épisode
-        all_std: dict avec 'move_x', 'move_y', 'rotation' - listes de std moyens
-        all_critic_loss: liste des critic loss par épisode
+        all_entropy: liste des entropies par learn
+        all_std: dict avec 'move_x', 'move_y', 'rotation' - listes de std par learn
+        all_critic_loss: liste des critic loss par learn
+        all_values: liste des valeurs moyennes d'état par learn
     """
     os.makedirs(save_dir, exist_ok=True)
     
     n_episodes = len(all_rewards)
     episodes = list(range(1, n_episodes + 1))
     
-    # Créer une figure avec 4 subplots
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+    # Créer une figure avec 5 subplots (2x3 grid)
+    fig, axes = plt.subplots(2, 3, figsize=(24, 12))
     fig.suptitle(f'BILAN FINAL - Tous les épisodes (1 à {n_episodes})', 
                  fontsize=18, fontweight='bold')
     
@@ -191,11 +196,12 @@ def plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, save_
              transform=ax1.transAxes, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5), fontsize=9)
     
-    # 2. Entropy (mesure d'exploration)
+    # 2. Entropy (mesure d'exploration) - LEARN CALLS en abscisse
     ax2 = axes[0, 1]
-    ax2.plot(episodes, all_entropy, 'g-', alpha=0.6, linewidth=0.8)
-    ax2.set_title('Entropy par Episode (exploration)', fontsize=13, fontweight='bold')
-    ax2.set_xlabel('Episode', fontsize=11)
+    learn_calls = list(range(1, len(all_entropy) + 1))
+    ax2.plot(learn_calls, all_entropy, 'g-', alpha=0.6, linewidth=0.8)
+    ax2.set_title('Entropy par Learn Call (exploration)', fontsize=13, fontweight='bold')
+    ax2.set_xlabel('Learn Call', fontsize=11)
     ax2.set_ylabel('Entropy', fontsize=11)
     ax2.grid(True, alpha=0.3)
     
@@ -206,13 +212,13 @@ def plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, save_
              transform=ax2.transAxes, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5), fontsize=9)
     
-    # 3. Standard Deviation par action (exploration)
+    # 3. Standard Deviation par action - LEARN CALLS en abscisse
     ax3 = axes[1, 0]
-    ax3.plot(episodes, all_std['move_x'], 'r-', alpha=0.6, linewidth=0.8, label='Move X')
-    ax3.plot(episodes, all_std['move_y'], 'b-', alpha=0.6, linewidth=0.8, label='Move Y')
-    ax3.plot(episodes, all_std['rotation'], 'orange', alpha=0.6, linewidth=0.8, label='Rotation')
-    ax3.set_title('Std par Action par Episode (exploration)', fontsize=13, fontweight='bold')
-    ax3.set_xlabel('Episode', fontsize=11)
+    ax3.plot(learn_calls, all_std['move_x'], 'r-', alpha=0.6, linewidth=0.8, label='Move X')
+    ax3.plot(learn_calls, all_std['move_y'], 'b-', alpha=0.6, linewidth=0.8, label='Move Y')
+    ax3.plot(learn_calls, all_std['rotation'], 'orange', alpha=0.6, linewidth=0.8, label='Rotation')
+    ax3.set_title('Std par Learn Call (exploration)', fontsize=13, fontweight='bold')
+    ax3.set_xlabel('Learn Call', fontsize=11)
     ax3.set_ylabel('Standard Deviation', fontsize=11)
     ax3.legend(loc='best', fontsize=10)
     ax3.grid(True, alpha=0.3)
@@ -225,11 +231,11 @@ def plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, save_
              transform=ax3.transAxes, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.5), fontsize=9)
     
-    # 4. Critic Loss
+    # 4. Critic Loss - LEARN CALLS en abscisse
     ax4 = axes[1, 1]
-    ax4.plot(episodes, all_critic_loss, 'purple', alpha=0.6, linewidth=0.8)
-    ax4.set_title('Critic Loss par Episode', fontsize=13, fontweight='bold')
-    ax4.set_xlabel('Episode', fontsize=11)
+    ax4.plot(learn_calls, all_critic_loss, 'purple', alpha=0.6, linewidth=0.8)
+    ax4.set_title('Critic Loss par Learn Call', fontsize=13, fontweight='bold')
+    ax4.set_xlabel('Learn Call', fontsize=11)
     ax4.set_ylabel('Loss', fontsize=11)
     ax4.grid(True, alpha=0.3)
     
@@ -239,6 +245,38 @@ def plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, save_
     ax4.text(0.02, 0.98, f'Mean: {mean_loss:.4f}\nFinal: {final_loss:.4f}',
              transform=ax4.transAxes, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='lavender', alpha=0.5), fontsize=9)
+    
+    # 5. Mean State Values (Critic Predictions) - LEARN CALLS
+    ax5 = axes[1, 2]
+    # Handle backward compatibility: pad with NaN if all_values is shorter
+    if len(all_values) > 0 and len(all_values) < len(learn_calls):
+        # Plot only the available values
+        values_calls = learn_calls[:len(all_values)]
+        ax5.plot(values_calls, all_values, 'teal', alpha=0.6, linewidth=0.8, label='State Values')
+        ax5.axvline(x=len(all_values), color='orange', linestyle=':', alpha=0.5, linewidth=1.5, label='Tracking started')
+    elif len(all_values) > 0:
+        ax5.plot(learn_calls, all_values, 'teal', alpha=0.6, linewidth=0.8)
+    ax5.axhline(y=0, color='r', linestyle='--', alpha=0.3, linewidth=1)
+    ax5.set_title('Mean State Value (Critic) par Learn Call', fontsize=13, fontweight='bold')
+    ax5.set_xlabel('Learn Call', fontsize=11)
+    ax5.set_ylabel('State Value', fontsize=11)
+    ax5.grid(True, alpha=0.3)
+    if len(all_values) < len(learn_calls):
+        ax5.legend(loc='best', fontsize=9)
+    
+    # Stats
+    if len(all_values) > 0:
+        mean_val = np.mean(all_values)
+        final_val = all_values[-1]
+        min_val = np.min(all_values)
+        max_val = np.max(all_values)
+        ax5.text(0.02, 0.98, f'Mean: {mean_val:.2f}\nFinal: {final_val:.2f}\nRange: [{min_val:.2f}, {max_val:.2f}]',
+                 transform=ax5.transAxes, verticalalignment='top',
+                 bbox=dict(boxstyle='round', facecolor='lightcyan', alpha=0.5), fontsize=9)
+    else:
+        ax5.text(0.5, 0.5, 'No data yet\n(metric added recently)',
+                 transform=ax5.transAxes, ha='center', va='center',
+                 fontsize=11, style='italic', color='gray')
     
     plt.tight_layout()
     
@@ -254,6 +292,14 @@ def plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, save_
     print(f"Entropy - Mean: {mean_entropy:.4f} | Final: {final_entropy:.4f}")
     print(f"Std - Final X: {final_std_x:.4f} | Y: {final_std_y:.4f} | Rot: {final_std_r:.4f}")
     print(f"Critic Loss - Mean: {mean_loss:.4f} | Final: {final_loss:.4f}")
+    if len(all_values) > 0:
+        mean_val = np.mean(all_values)
+        final_val = all_values[-1]
+        min_val = np.min(all_values)
+        max_val = np.max(all_values)
+        print(f"State Values - Mean: {mean_val:.2f} | Final: {final_val:.2f} | Range: [{min_val:.2f}, {max_val:.2f}]")
+    else:
+        print(f"State Values - (not tracked in resumed checkpoint)")
     print(f"\n✅ Graphique sauvegardé: {filename}")
     print("="*70)
 
@@ -308,9 +354,9 @@ def update_live_plot(fig, ax1, ax2, scores, update_freq=10):
     fig.canvas.flush_events()
 
 # alpha=0.0003
-def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
+def train(n_games=1000, N=256, batch_size=64, n_epochs=15, alpha=0.0003,
           render=False, save_best=True, live_plot=True, plot_first_episode=True,
-          resume=False, model_path='models/ppo', gamma=0.98):
+          resume=False, model_path='models/ppo', gamma=0.98, static_spawn=False):
     """
     Entraîne l'agent PPO sur Ping-Pong.
     
@@ -330,7 +376,7 @@ def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
     """
     # Créer l'environnement
     render_mode = "human" if render else None
-    env = PingPongEnv(render_mode=render_mode)
+    env = PingPongEnv(render_mode=render_mode, static_spawn=static_spawn)
     
     # Initialiser Pygame et un clock si render est activé (pour gestion events + tick)
     clock = None
@@ -342,7 +388,7 @@ def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
     # Observation: embeddings (3x16) + 10 features continues = 58 total
     agent = Agent(
         n_actions=3,          # move_x, move_y, rotate
-        input_dims=10,        # nombre de features continues (3 embeddings gérés séparément: ball, paddle, angle)
+        input_dims=env.observation_space.shape[0],        # nombre de features continues (3 embeddings gérés séparément: ball, paddle, angle)
         gamma=gamma,          # Paramètre configurable (0.98 par défaut)
         alpha=alpha,
         gae_lambda=0.95,
@@ -373,6 +419,7 @@ def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
             all_entropy = training_state['all_entropy']
             all_std = training_state['all_std']
             all_critic_loss = training_state['all_critic_loss']
+            all_values = training_state.get('all_values', [])  # Backward compat
             score_history = training_state['score_history']
             best_score = training_state['best_score']
             print(f"🔄 État d'entraînement restauré")
@@ -388,23 +435,25 @@ def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
     avg_score = 0
     n_steps = 0
     
-    # Métriques GLOBALES pour le bilan final (tous les épisodes)
+    # Compteur du nombre d'appels à learn() pour les graphes
+    learn_call_count = 0 if training_state is None else training_state.get('learn_call_count', 0)
+    
+    # Métriques GLOBALES
+    # Rewards par épisode, mais ENTROPY/STD/CRITIC par learn
     all_rewards = [] if training_state is None else training_state['all_rewards']
     all_entropy = [] if training_state is None else training_state['all_entropy']
     all_std = ({'move_x': [], 'move_y': [], 'rotation': []} if training_state is None 
                else training_state['all_std'])
     all_critic_loss = [] if training_state is None else training_state['all_critic_loss']
+    all_values = [] if training_state is None else training_state.get('all_values', [])
     
     # Métriques pour tracking détaillé par siècle (100 épisodes)
     century_rewards = []  # Rewards par épisode pour le siècle en cours
-    century_entropy = []  # Entropy par épisode
-    century_std = {'move_x': [], 'move_y': [], 'rotation': []}  # Std par action
-    century_critic_loss = []  # Critic loss par épisode
+    century_entropy = []  # Entropy par learn
+    century_std = {'move_x': [], 'move_y': [], 'rotation': []}  # Std par learn
+    century_critic_loss = []  # Critic loss par learn
     
-    # Variables pour accumuler les métriques d'un épisode
-    episode_metrics = {'entropy': [], 'std_move_x': [], 'std_move_y': [], 
-                      'std_rotation': [], 'critic_loss': []}
-    episode_learn_count = 0
+    # Plus de moyennes par épisode pour entropy/std/loss; métriques stockées par learn
     
     # Tracking par phase pour afficher les stats
     phase_stats = {0: {'wins': 0, 'losses': 0}, 
@@ -514,14 +563,20 @@ def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
             if n_steps % N == 0:
                 metrics = agent.learn()
                 learn_iters += 1
-                
-                # Accumuler les métriques de l'épisode
-                episode_metrics['entropy'].append(metrics['entropy'])
-                episode_metrics['std_move_x'].append(metrics['std_move_x'])
-                episode_metrics['std_move_y'].append(metrics['std_move_y'])
-                episode_metrics['std_rotation'].append(metrics['std_rotation'])
-                episode_metrics['critic_loss'].append(metrics['critic_loss'])
-                episode_learn_count += 1
+                learn_call_count += 1
+                # Accumuler directement par learn (global + siècle)
+                all_entropy.append(metrics['entropy'])
+                all_std['move_x'].append(metrics['std_move_x'])
+                all_std['move_y'].append(metrics['std_move_y'])
+                all_std['rotation'].append(metrics['std_rotation'])
+                all_critic_loss.append(metrics['critic_loss'])
+                all_values.append(metrics['mean_value'])
+
+                century_entropy.append(metrics['entropy'])
+                century_std['move_x'].append(metrics['std_move_x'])
+                century_std['move_y'].append(metrics['std_move_y'])
+                century_std['rotation'].append(metrics['std_rotation'])
+                century_critic_loss.append(metrics['critic_loss'])
 
             observation = observation_
 
@@ -529,41 +584,13 @@ def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
             if render and clock:
                 clock.tick(FPS)
         
-        # Calculer les moyennes des métriques pour cet épisode
-        if episode_learn_count > 0:
-            ep_entropy = np.mean(episode_metrics['entropy'])
-            ep_std_x = np.mean(episode_metrics['std_move_x'])
-            ep_std_y = np.mean(episode_metrics['std_move_y'])
-            ep_std_rot = np.mean(episode_metrics['std_rotation'])
-            ep_critic_loss = np.mean(episode_metrics['critic_loss'])
-        else:
-            # Si aucun learn n'a eu lieu, mettre des valeurs par défaut
-            ep_entropy = 0.0
-            ep_std_x = 0.0
-            ep_std_y = 0.0
-            ep_std_rot = 0.0
-            ep_critic_loss = 0.0
-        
-        # Sauvegarder dans les listes GLOBALES (pour le bilan final)
+        # Sauvegarder dans les listes GLOBALES (rewards par épisode)
         all_rewards.append(score)
-        all_entropy.append(ep_entropy)
-        all_std['move_x'].append(ep_std_x)
-        all_std['move_y'].append(ep_std_y)
-        all_std['rotation'].append(ep_std_rot)
-        all_critic_loss.append(ep_critic_loss)
         
-        # Sauvegarder aussi dans les listes par SIÈCLE (pour plots tous les 100 épisodes)
+        # Sauvegarder aussi dans les listes par SIÈCLE (rewards par épisode)
         century_rewards.append(score)
-        century_entropy.append(ep_entropy)
-        century_std['move_x'].append(ep_std_x)
-        century_std['move_y'].append(ep_std_y)
-        century_std['rotation'].append(ep_std_rot)
-        century_critic_loss.append(ep_critic_loss)
         
-        # Réinitialiser les métriques pour le prochain épisode
-        episode_metrics = {'entropy': [], 'std_move_x': [], 'std_move_y': [], 
-                          'std_rotation': [], 'critic_loss': []}
-        episode_learn_count = 0
+        # Pas de moyennes par épisode pour entropy/std/loss (stockés par learn)
         
         # Plot tous les 100 épisodes (un siècle)
         if (i + 1) % 100 == 0 and len(century_rewards) > 0:
@@ -628,9 +655,11 @@ def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
                 all_entropy=all_entropy,
                 all_std=all_std,
                 all_critic_loss=all_critic_loss,
+                all_values=all_values,
                 score_history=score_history,
                 best_score=best_score,
-                training_phase=current_phase  # Sauvegarder la phase
+                training_phase=current_phase,  # Sauvegarder la phase
+                learn_call_count=learn_call_count
             )
     
     # Fermer le plot interactif
@@ -643,7 +672,7 @@ def train(n_games=1000, N=1024, batch_size=64, n_epochs=15, alpha=0.0003,
     plot_learning_curve(x, score_history, figure_file)
     
     # Tracer le BILAN FINAL avec toutes les métriques (valeurs réelles)
-    plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss)
+    plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, all_values)
     
     env.close()
     print("\n=== Entraînement terminé ===")
@@ -684,7 +713,7 @@ def play_ai_vs_ai(model_path='models/ppo', num_episodes=5, vs_trained=False):
     
     agent_left = Agent(
         n_actions=3,
-        input_dims=10,
+        input_dims=14,
         gamma=0.99,
         alpha=0.0003,
         chkpt_dir=model_path
@@ -814,7 +843,7 @@ def play_ai_vs_human(model_path='models/ppo', mouse_control_p1=False):
     
     agent = Agent(
         n_actions=3,
-        input_dims=10,
+        input_dims=14,
         gamma=0.99,
         alpha=0.0003,
         chkpt_dir=model_path
@@ -894,6 +923,8 @@ if __name__ == "__main__":
                         help='Chemin vers le modèle')
     parser.add_argument('--mouse', action='store_true',
                         help='Activer le contrôle à la souris pour le joueur 1 (modes: human, ai_vs_human)')
+    parser.add_argument('--static_spawn', action='store_true',
+                        help='Spawn la balle immobile sans gravité jusqu’au premier contact raquette')
     
     args = parser.parse_args()
     
@@ -901,7 +932,7 @@ if __name__ == "__main__":
         # Par défaut resume=True, sauf si --fresh est spécifié
         should_resume = args.resume and not args.fresh
         train(n_games=args.episodes, render=args.render, live_plot=args.render_plot,
-              resume=should_resume, model_path=args.model_path)
+              resume=should_resume, model_path=args.model_path, static_spawn=args.static_spawn)
     elif args.mode == 'play':
         play_ai_vs_ai(model_path=args.model_path, num_episodes=args.episodes)
     elif args.mode == 'human':

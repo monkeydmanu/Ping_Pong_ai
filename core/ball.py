@@ -14,6 +14,9 @@ class Ball:
         self.angle = 90      # angle actuel pour l'affichage
         self.angular_speed = angular_speed      # rad/s
         
+        # Flags physiques
+        self.gravity_enabled = True  # peut être désactivée pour un spawn statique
+        
         # Tracking des rebonds sur la table
         self.bounces_left = 0   # Nombre de rebonds sur la moitié gauche
         self.bounces_right = 0  # Nombre de rebonds sur la moitié droite
@@ -56,9 +59,10 @@ class Ball:
             self.vel[0] *= (1 - drag_factor * dt_scaled)
             self.vel[1] *= (1 - drag_factor * dt_scaled)
         
-        # Gravité : GRAVITY=9.81 m/s², converti en pixels/s²
-        gravity_pixels = GRAVITY * 200  # ~2000 pixels/s²
-        self.vel[1] += gravity_pixels * dt_scaled
+        # Gravité : GRAVITY=9.81 m/s², converti en pixels/s² (si activée)
+        if self.gravity_enabled:
+            gravity_pixels = GRAVITY * 200  # ~2000 pixels/s²
+            self.vel[1] += gravity_pixels * dt_scaled
         
         # Translation
         self.pos += self.vel * dt_scaled
@@ -74,8 +78,8 @@ def spawn_ball_left(table):
     """Crée une balle au bord gauche de la table (service gauche)."""
     x_table, y_table, w_table, h_table = table.get_rect()
     ball = Ball(
-        x=x_table + 100,  # Bord gauche de la table # + 30
-        y=y_table - 400,  # Au-dessus de la table
+        x=x_table + 150,  # Bord gauche de la table # + 30
+        y=y_table - 220,  # Au-dessus de la table
         vx=0,
         vy=0,
         angular_speed=0
@@ -89,7 +93,7 @@ def spawn_ball_right(table):
     x_table, y_table, w_table, h_table = table.get_rect()
     ball = Ball(
         x=x_table + w_table - 30,  # Bord droit de la table
-        y=y_table - 400,  # Au-dessus de la table
+        y=y_table - 220,  # Au-dessus de la table
         vx=0,
         vy=0,
         angular_speed=0

@@ -54,7 +54,7 @@ class Agent:
         
         Returns:
             action: np.array de shape (n_actions,)
-            log_prob: log probabilité de l'action (somme sur toutes les dimensions)
+            log_prob: log probabilité corrigée (tanh-squashed) de l'action
             value: valeur estimée de l'état
         """
         # Préparer l'état pour le réseau
@@ -73,17 +73,17 @@ class Agent:
         mu, std = self.actor(state)
         value = self.critic(state)
         
-        # Distribution normale pour chaque action
+        # Squashed Gaussian: échantillonner u ~ N(mu, std), action a = tanh(u)
         dist = Normal(mu, std)
-        action = dist.sample()
+        u = dist.sample()
+        a = T.tanh(u)
         
-        # Log prob = somme des log probs de chaque dimension
-        log_prob = dist.log_prob(action).sum(dim=-1)
-        
-        # Champ action entre [-1, 1]
-        action = T.clamp(action, -1.0, 1.0)
+        # Log-probabilité corrigée via changement de variables
+        # log pi(a) = log N(u) - sum log(1 - tanh(u)^2 + eps) ; ici tanh(u)=a
+        eps = 1e-6
+        log_prob = dist.log_prob(u).sum(dim=-1) - T.sum(T.log(1 - a.pow(2) + eps), dim=-1)
 
-        action = action.squeeze().cpu().detach().numpy()
+        action = a.squeeze().cpu().detach().numpy()
         log_prob = log_prob.squeeze().item()
         value = value.squeeze().item()
 
@@ -95,7 +95,11 @@ class Agent:
         total_critic_loss = 0.0
         total_entropy = 0.0
         total_std = np.zeros(self.n_actions)
+        total_critic_values = 0.0  # Track mean state values
         num_batches = 0
+        
+        # Flag pour debug des high actor loss (une seule fois par learn)
+        high_loss_logged = False
         
         for _ in range(self.n_epochs):
             state_arr, action_arr, old_prob_arr, vals_arr,\
@@ -105,15 +109,16 @@ class Agent:
             values = vals_arr
             advantage = np.zeros(len(reward_arr), dtype=np.float32)
 
-            # Calcul GAE (Generalized Advantage Estimation)
-            for t in range(len(reward_arr)-1):
-                discount = 1
-                a_t = 0
-                for k in range(t, len(reward_arr)-1):
-                    a_t += discount * (reward_arr[k] + self.gamma * values[k+1] *\
-                            (1 - int(dones_arr[k])) - values[k])
-                    discount *= self.gamma * self.gae_lambda
-                advantage[t] = a_t
+            # Calcul GAE (Optimisé O(N) - Backwards)
+            last_gae_lam = 0
+            # On itère à l'envers, de la fin vers le début
+            for t in reversed(range(len(reward_arr) - 1)):
+                # Delta = erreur de prédiction TD (Temporal Difference)
+                delta = reward_arr[t] + self.gamma * values[t+1] * (1 - int(dones_arr[t])) - values[t]
+                
+                # Formule récursive du GAE
+                last_gae_lam = delta + self.gamma * self.gae_lambda * (1 - int(dones_arr[t])) * last_gae_lam
+                advantage[t] = last_gae_lam
             
             advantage = T.tensor(advantage).to(self.actor.device)
             values = T.tensor(values).to(self.actor.device)
@@ -148,9 +153,13 @@ class Agent:
                 critic_value = self.critic(states)
                 critic_value = T.squeeze(critic_value)
 
-                # Calculer les nouvelles log probs
+                # Calculer les nouvelles log probs (tanh-squashed)
                 dist = Normal(mu, std)
-                new_probs = dist.log_prob(actions).sum(dim=-1) # probabilité sur la nouvelle distribution d'avoir fait cette action
+                eps = 1e-6
+                # actions sont déjà dans [-1,1]; remonter u = atanh(a)
+                a = actions.clamp(-1 + eps, 1 - eps)
+                u = 0.5 * (T.log1p(a) - T.log1p(-a))  # atanh(a) = 0.5 * (ln(1+a) - ln(1-a))
+                new_probs = dist.log_prob(u).sum(dim=-1) - T.sum(T.log(1 - a.pow(2) + eps), dim=-1)
                 entropy = dist.entropy().sum(dim=-1).mean()  # mesure du chaos
                 # entropy élevé -> courbe plate -> exploration
                 # entropy faible -> courbe pointue -> exploitation
@@ -163,12 +172,22 @@ class Agent:
                 weighted_clipped_probs = T.clamp(prob_ratio, 
                                                   1 - self.policy_clip,
                                                   1 + self.policy_clip) * advantage[batch]
-                actor_loss = -T.min(weighted_probs, weighted_clipped_probs).mean() # pour ne pas modifier trop vite la policy
+                actor_loss = -T.min(weighted_probs, weighted_clipped_probs).mean()
 
-                # Loss critique (MSE), sert de baseline pour réduire la variance des gradients, pas à choisir l'action
-                returns = advantage[batch] + values[batch] # proche de la reward cumulée
-                critic_loss = (returns - critic_value) ** 2
-                critic_loss = critic_loss.mean()
+                # Loss critique avec Clipping (PPO standard pour stabilité)
+                returns = advantage[batch] + values[batch]
+                v_pred = critic_value
+                v_old = values[batch]
+                
+                # 1. Loss standard
+                v_loss1 = (returns - v_pred) ** 2
+                
+                # 2. Loss clippée - force la valeur à rester proche de l'ancienne
+                v_pred_clipped = v_old + T.clamp(v_pred - v_old, -self.policy_clip, self.policy_clip)
+                v_loss2 = (returns - v_pred_clipped) ** 2
+                
+                # On prend le max des deux (contrainte la plus dure)
+                critic_loss = 0.5 * T.max(v_loss1, v_loss2).mean()
                 # Cas 1 – État réellement bon (gagner le point) mais sous-estimé
                 # returns ≫ critic_value → erreur élevée → loss augmente → le critique apprend à monter sa prédiction.
                 # Cas 2 – État réellement mauvais (perdre le point) mais surestimé
@@ -178,25 +197,49 @@ class Agent:
                 # Cas 4 – Rewards rares et forts (ping-pong)
                 # Quand un point est gagné/perdu, returns fait un saut (±100) → si le critique ne l’avait pas anticipé, la loss grimpe, forçant une mise à jour importante pour mieux prévoir ces transitions.
 
-                # Loss totale sans bonus d'entropie (laisser l'actor loss réduire la variance quand utile)
-                total_loss = actor_loss + 0.5 * critic_loss
+                
+                # Loss totale avec entropy bonus (c2 réduit pour éviter d'entretenir une std élevée
+                # sur des dimensions à faible avantage comme move_x/move_y)
+                total_loss = actor_loss + critic_loss - 0.001 * entropy
+
+                #print(f"Debug Actor Loss: {actor_loss.item():.4f}, Critic Loss: {critic_loss.item():.4f}, Total Loss: {total_loss.item():.4f}")
                 
                 # Backpropagation
                 self.actor.optimizer.zero_grad()
                 self.critic.optimizer.zero_grad()
                 total_loss.backward()
-                # Clipping des gradients pour éviter l'explosion
-                T.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
-                T.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+                # Clipping des gradients pour éviter l'explosion (PPO: max_norm=1.0)
+                T.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+                T.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
                 
                 # Accumuler les métriques
-                total_actor_loss += actor_loss.item()
+                actor_loss_value = actor_loss.item()
+                total_actor_loss += actor_loss_value
                 total_critic_loss += critic_loss.item()
                 total_entropy += entropy.item()
                 total_std += std.mean(dim=0).detach().cpu().numpy()
+                total_critic_values += critic_value.mean().item()  # Track actual values
                 num_batches += 1
+                
+                # 🔍 DEBUG: Actor loss élevée (>10)
+                if not high_loss_logged and actor_loss_value > 10.0:
+                    high_loss_logged = True
+                    print(f"\n⚠️  HIGH ACTOR LOSS DETECTED: {actor_loss_value:.4f}")
+                    print(f"    Advantage batch stats:")
+                    print(f"      - Mean: {advantage[batch].mean().item():.4f}")
+                    print(f"      - Std: {advantage[batch].std().item():.4f}")
+                    print(f"      - Min: {advantage[batch].min().item():.4f}")
+                    print(f"      - Max: {advantage[batch].max().item():.4f}")
+                    print(f"    Prob ratio stats:")
+                    print(f"      - Mean: {prob_ratio.mean().item():.4f}")
+                    print(f"      - Min: {prob_ratio.min().item():.4f}")
+                    print(f"      - Max: {prob_ratio.max().item():.4f}")
+                    print(f"    Weighted probs: {weighted_probs.mean().item():.4f}")
+                    print(f"    Clipped probs: {weighted_clipped_probs.mean().item():.4f}")
+                    print(f"    Entropy: {entropy.item():.4f}")
+                    print(f"    Std (mean): {std.mean().item():.4f}\n")
 
         self.memory.clear_memory()
         
@@ -207,7 +250,8 @@ class Agent:
             'entropy': total_entropy / max(num_batches, 1),
             'std_move_x': total_std[0] / max(num_batches, 1),
             'std_move_y': total_std[1] / max(num_batches, 1),
-            'std_rotation': total_std[2] / max(num_batches, 1)
+            'std_rotation': total_std[2] / max(num_batches, 1),
+            'mean_value': total_critic_values / max(num_batches, 1)  # Average state value
         }
         return metrics
 
@@ -232,12 +276,11 @@ def predict_action(agent, observation, deterministic=False):
     mu, std = agent.actor(state)
     
     if deterministic:
-        action = mu
+        action = T.tanh(mu)
     else:
         dist = Normal(mu, std)
-        action = dist.sample()
-    
-    action = T.clamp(action, -1.0, 1.0)
+        u = dist.sample()
+        action = T.tanh(u)
     
     # Convertir vers numpy de manière robuste
     action_np = action.squeeze().detach()

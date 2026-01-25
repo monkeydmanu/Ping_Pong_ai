@@ -38,18 +38,24 @@ class ActorNetwork(nn.Module):
             total_input_dims = input_dims
         
         # Réseau pour la moyenne des actions
-        self.actor = nn.Sequential(
-            nn.Linear(total_input_dims, fc1_dims),
-            nn.ReLU(),
-            nn.Linear(fc1_dims, fc2_dims),
-            nn.ReLU(),
-            nn.Linear(fc2_dims, n_actions),
-            nn.Tanh()  # Sortie entre [-1, 1] pour actions continues
-        )
+        # Mu non borné ici; l'action est bornée plus tard via tanh-squash (change of variables)
+        self.fc1 = nn.Linear(total_input_dims, fc1_dims)
+        self.fc2 = nn.Linear(fc1_dims, fc2_dims)
+        self.mu_head = nn.Linear(fc2_dims, n_actions)
+        
+        # Initialisation orthogonale pour stabilité (standard PPO)
+        nn.init.orthogonal_(self.fc1.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.constant_(self.fc1.bias, 0.0)
+        nn.init.orthogonal_(self.fc2.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.constant_(self.fc2.bias, 0.0)
+        
+        # Petite initialisation pour mu_head (facteur 0.01) pour commencer proche de tanh(0)=0
+        nn.init.orthogonal_(self.mu_head.weight, gain=0.01)
+        nn.init.constant_(self.mu_head.bias, 0.0)
         
         # Log de l'écart-type (appris)
         # Initialisé à 0 -> sigma = exp(0) = 1.0 (exploration forte dès le départ)
-        self.log_std = nn.Parameter(T.ones(n_actions) * 0)
+        self.log_std = nn.Parameter(T.ones(n_actions) * 0.0)
 
         self.optimizer = optim.Adam(self.parameters(), lr=alpha)
         self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
@@ -81,12 +87,15 @@ class ActorNetwork(nn.Module):
         else:
             x = state
         
-        mu = self.actor(x)
-        # Clamp log_std pour empêcher le collapse d'exploration
-        # Maximum sigma = exp(0.3) ≈ 1.35 (évite saturation du clamp [-1,1])
-        # Minimum sigma = exp(-2) ≈ 0.135 (variance minimale pour éviter effondrement)
-        # Permet à log_std d'apprendre: peut descendre vers -2 si avantages positifs
-        log_std = T.clamp(self.log_std, -2, 0.3)
+        # Forward pass manuel (plus de Sequential)
+        x = T.relu(self.fc1(x))
+        x = T.relu(self.fc2(x))
+        mu = self.mu_head(x)
+        
+        # Log_std sans clamp supérieur pour permettre l'apprentissage naturel (PPO paper)
+        # Minimum sigma = exp(-4) ≈ 0.018 (variance minimale pour éviter effondrement)
+        # Le clamp inférieur maintient la stabilité numérique
+        log_std = T.clamp(self.log_std, -4, 0)
         std = log_std.exp().expand_as(mu)
         
         return mu, std
