@@ -9,7 +9,7 @@ import numpy as np
 import pygame
 
 from config import (
-    WIDTH, HEIGHT, FPS, TABLE_Y, PIXELS_PER_METER,
+    WIDTH, HEIGHT, FPS, FPS_BASE, TABLE_Y, PIXELS_PER_METER,
     RACKET_WIDTH_PX, RACKET_HEIGHT_PX, TABLE_WIDTH_PX,
     ADAPTIVE_BOUNDARY_OFFSET, OUT_MARGIN
 )
@@ -265,7 +265,9 @@ class PingPongEnv(gym.Env):
         self._apply_action(self.opponent_paddle, actual_opponent_action)
         
         # === Mettre à jour la physique ===
-        dt = 1.0 / FPS
+        # Utiliser FPS_BASE pour que la physique soit indépendante du FPS réel
+        # Les vitesses sont normalisées pour FPS_BASE, donc on doit utiliser dt=1/FPS_BASE
+        dt = 1.0 / FPS_BASE
         self.agent_paddle.update(dt, speed_factor=self._speed_factor)
         self.opponent_paddle.update(dt, speed_factor=self._speed_factor)
         
@@ -588,7 +590,8 @@ class PingPongEnv(gym.Env):
         # action_rot ∈ [-1, 1] → angle change proportionnellement
         # max_rotation_speed ≈ 360°/s avec action_rot=1
         max_rotation_speed = 360.0  # degrés par seconde
-        dt = 1.0 / FPS
+        # Utiliser FPS_BASE pour que peu importe le FPS réel, la rotation soit cohérente
+        dt = 1.0 / FPS_BASE
         
         if rotate != 0:
             # angle += action_rot * max_rotation_speed * dt

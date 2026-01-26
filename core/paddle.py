@@ -12,6 +12,7 @@ from config import (
     RACKET_WIDTH_PX,
     SPEED_RACKET,
     FPS,
+    FPS_BASE,
     PADDLE_SPEED_SCALE,
     PADDLE_ROT_SCALE,
 )
@@ -66,21 +67,29 @@ class Paddle:
             self.vel[0] = 0
 
     # Mouvement vertical avec accélération
-    def move_up(self):
-        self.vel[1] -= self.acceleration * (1.0 / FPS)  # accélère vers le haut
+    def move_up(self, dt=None):
+        if dt is None:
+            dt = 1.0 / FPS
+        self.vel[1] -= self.acceleration * dt  # accélère vers le haut
 
-    def move_down(self):
-        self.vel[1] += self.acceleration * (1.0 / FPS)  # accélère vers le bas
+    def move_down(self, dt=None):
+        if dt is None:
+            dt = 1.0 / FPS
+        self.vel[1] += self.acceleration * dt  # accélère vers le bas
 
     def stop_vertical(self):
         self.vel[1] = 0  # Arrêt instantané
 
     # Mouvement horizontal avec accélération
-    def move_left(self):
-        self.vel[0] -= self.acceleration * (1.0 / FPS)
+    def move_left(self, dt=None):
+        if dt is None:
+            dt = 1.0 / FPS
+        self.vel[0] -= self.acceleration * dt
 
-    def move_right(self):
-        self.vel[0] += self.acceleration * (1.0 / FPS)
+    def move_right(self, dt=None):
+        if dt is None:
+            dt = 1.0 / FPS
+        self.vel[0] += self.acceleration * dt
 
     def stop_horizontal(self):
         self.vel[0] = 0  # Arrêt instantané

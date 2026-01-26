@@ -3,7 +3,7 @@ Classe représentant la balle et sa physique.
 """
 
 import numpy as np
-from config import GRAVITY, BALL_RADIUS, FPS, BALL_SPEED_SCALE
+from config import GRAVITY, BALL_RADIUS, FPS, FPS_BASE, BALL_SPEED_SCALE
 from engine.collision import check_table_collision
 
 class Ball:
@@ -31,7 +31,7 @@ class Ball:
             speed_factor: Facteur de curriculum (0.5 = balle lente, 1.0 = normale)
         """
         if dt is None:
-            dt = 1.0 / FPS  # Temps réel par frame (1/120 = 0.0083s)
+            dt = 1.0 / FPS_BASE  # Utiliser FPS_BASE pour une physique indépendante du FPS réel
 
         # Échelle globale pour ralentir ou accélérer la physique de la balle
         # Appliquer speed_factor ici pour curriculum learning

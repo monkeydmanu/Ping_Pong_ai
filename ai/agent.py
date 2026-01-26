@@ -64,13 +64,14 @@ class Agent:
                 'ball_idx': T.tensor([observation['ball_idx']], dtype=T.long).to(self.actor.device),
                 'paddle_idx': T.tensor([observation['paddle_idx']], dtype=T.long).to(self.actor.device),
                 'angle_idx': T.tensor([observation['angle_idx']], dtype=T.long).to(self.actor.device),
-                'continuous': T.tensor([observation['continuous']], dtype=T.float).to(self.actor.device)
+                'continuous': T.tensor(np.array([observation['continuous']], dtype=np.float32), dtype=T.float).to(self.actor.device)
             }
+            # Debug: afficher les infos du dict
+            #print(f"Debug: Choosing action | ball_idx shape: {state['ball_idx'].shape}, continuous shape: {state['continuous'].shape}")
         else:
             # Format classique (array)
             state = T.tensor([observation], dtype=T.float).to(self.actor.device)
-
-        print(f"Debug: Choosing action : {state.shape = }")
+            #print(f"Debug: Choosing action : {state.shape = }")
 
         with T.no_grad():
             mu, std = self.actor(state)
@@ -137,7 +138,7 @@ class Agent:
                     ball_indices = T.tensor([s['ball_idx'] for s in batch_states], dtype=T.long).to(self.actor.device)
                     paddle_indices = T.tensor([s['paddle_idx'] for s in batch_states], dtype=T.long).to(self.actor.device)
                     angle_indices = T.tensor([s['angle_idx'] for s in batch_states], dtype=T.long).to(self.actor.device)
-                    continuous_features = T.tensor([s['continuous'] for s in batch_states], dtype=T.float).to(self.actor.device)
+                    continuous_features = T.tensor(np.array([s['continuous'] for s in batch_states], dtype=np.float32), dtype=T.float).to(self.actor.device)
                     states = {
                         'ball_idx': ball_indices,
                         'paddle_idx': paddle_indices,
@@ -272,7 +273,7 @@ def predict_action(agent, observation, deterministic=False):
             'ball_idx': T.tensor([observation['ball_idx']], dtype=T.long).to(agent.actor.device),
             'paddle_idx': T.tensor([observation['paddle_idx']], dtype=T.long).to(agent.actor.device),
             'angle_idx': T.tensor([observation['angle_idx']], dtype=T.long).to(agent.actor.device),
-            'continuous': T.tensor([observation['continuous']], dtype=T.float).to(agent.actor.device)
+            'continuous': T.tensor(np.array([observation['continuous']], dtype=np.float32), dtype=T.float).to(agent.actor.device)
         }
     else:
         state = T.tensor([observation], dtype=T.float).to(agent.actor.device)
