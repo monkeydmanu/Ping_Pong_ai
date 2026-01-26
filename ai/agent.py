@@ -70,8 +70,11 @@ class Agent:
             # Format classique (array)
             state = T.tensor([observation], dtype=T.float).to(self.actor.device)
 
-        mu, std = self.actor(state)
-        value = self.critic(state)
+        print(f"Debug: Choosing action : {state.shape = }")
+
+        with T.no_grad():
+            mu, std = self.actor(state)
+            value = self.critic(state)
         
         # Squashed Gaussian: échantillonner u ~ N(mu, std), action a = tanh(u)
         dist = Normal(mu, std)
@@ -151,14 +154,14 @@ class Agent:
                 # Forward pass
                 mu, std = self.actor(states)
                 critic_value = self.critic(states)
-                critic_value = T.squeeze(critic_value)
+                critic_value = T.squeeze(critic_value, dim=-1)
 
                 # Calculer les nouvelles log probs (tanh-squashed)
                 dist = Normal(mu, std)
                 eps = 1e-6
                 # actions sont déjà dans [-1,1]; remonter u = atanh(a)
                 a = actions.clamp(-1 + eps, 1 - eps)
-                u = 0.5 * (T.log1p(a) - T.log1p(-a))  # atanh(a) = 0.5 * (ln(1+a) - ln(1-a))
+                u = T.atanh(a)  # Numériquement plus stable
                 new_probs = dist.log_prob(u).sum(dim=-1) - T.sum(T.log(1 - a.pow(2) + eps), dim=-1)
                 entropy = dist.entropy().sum(dim=-1).mean()  # mesure du chaos
                 # entropy élevé -> courbe plate -> exploration
@@ -268,6 +271,7 @@ def predict_action(agent, observation, deterministic=False):
         state = {
             'ball_idx': T.tensor([observation['ball_idx']], dtype=T.long).to(agent.actor.device),
             'paddle_idx': T.tensor([observation['paddle_idx']], dtype=T.long).to(agent.actor.device),
+            'angle_idx': T.tensor([observation['angle_idx']], dtype=T.long).to(agent.actor.device),
             'continuous': T.tensor([observation['continuous']], dtype=T.float).to(agent.actor.device)
         }
     else:

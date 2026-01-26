@@ -118,9 +118,9 @@ def plot_century_metrics(episode_range, rewards_history, entropy_history,
     ax1 = axes[0, 0]
     ax1.plot(episodes, rewards_history, 'b-', alpha=0.7, linewidth=1)
     ax1.axhline(y=0, color='r', linestyle='--', alpha=0.5)
-    ax1.set_title('Reward Total par Episode', fontsize=12, fontweight='bold')
+    ax1.set_title('Reward Moyen par Step (par épisode)', fontsize=12, fontweight='bold')
     ax1.set_xlabel('Episode')
-    ax1.set_ylabel('Reward Total')
+    ax1.set_ylabel('Reward Moyen / Step')
     ax1.grid(True, alpha=0.3)
     
     # 2. Entropy (mesure d'exploration) - LEARN CALLS en abscisse
@@ -179,13 +179,13 @@ def plot_final_summary(all_rewards, all_entropy, all_std, all_critic_loss, all_v
     fig.suptitle(f'BILAN FINAL - Tous les épisodes (1 à {n_episodes})', 
                  fontsize=18, fontweight='bold')
     
-    # 1. Rewards par épisode (valeurs réelles)
+    # 1. Rewards par épisode (moyenne par step)
     ax1 = axes[0, 0]
     ax1.plot(episodes, all_rewards, 'b-', alpha=0.6, linewidth=0.8)
     ax1.axhline(y=0, color='r', linestyle='--', alpha=0.5)
-    ax1.set_title('Reward Total par Episode (valeurs réelles)', fontsize=13, fontweight='bold')
+    ax1.set_title('Reward Moyen par Step (par épisode)', fontsize=13, fontweight='bold')
     ax1.set_xlabel('Episode', fontsize=11)
-    ax1.set_ylabel('Reward Total', fontsize=11)
+    ax1.set_ylabel('Reward Moyen / Step', fontsize=11)
     ax1.grid(True, alpha=0.3)
     
     # Ajouter stats textuelles
@@ -485,6 +485,8 @@ def train(n_games=1000, N=256, batch_size=64, n_epochs=15, alpha=0.0003,
         print(f"Reprise à partir de l'épisode {start_episode + 1}/{n_games + start_episode}")
     print("=" * 50)
 
+    reward_affichage = []
+
     for i in range(start_episode, start_episode + n_games):
         # === CURRICULUM LEARNING: Mettre à jour la phase ===
         env.set_episode_count(i)
@@ -547,6 +549,8 @@ def train(n_games=1000, N=256, batch_size=64, n_epochs=15, alpha=0.0003,
             # Calculer la récompense pour l'entraînement
             reward = env.compute_reward(info)
             done = terminated
+            
+            reward_affichage.append(reward)
 
             n_steps += 1
             score += reward
@@ -583,11 +587,12 @@ def train(n_games=1000, N=256, batch_size=64, n_epochs=15, alpha=0.0003,
             if render and clock:
                 clock.tick(FPS)
         
-        # Sauvegarder dans les listes GLOBALES (rewards par épisode)
-        all_rewards.append(score)
+        # Sauvegarder dans les listes GLOBALES (moyenne des rewards par step, pas somme)
+        avg_reward_per_step = score / len(episode_rewards) if len(episode_rewards) > 0 else 0
+        all_rewards.append(avg_reward_per_step)
         
-        # Sauvegarder aussi dans les listes par SIÈCLE (rewards par épisode)
-        century_rewards.append(score)
+        # Sauvegarder aussi dans les listes par SIÈCLE (moyenne par step)
+        century_rewards.append(avg_reward_per_step)
         
         # Pas de moyennes par épisode pour entropy/std/loss (stockés par learn)
         
@@ -661,6 +666,8 @@ def train(n_games=1000, N=256, batch_size=64, n_epochs=15, alpha=0.0003,
                 learn_call_count=learn_call_count
             )
     
+    print(f"reward affichage : {reward_affichage}")
+
     # Fermer le plot interactif
     if live_plot:
         plt.ioff()
