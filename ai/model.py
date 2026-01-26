@@ -101,11 +101,14 @@ class ActorNetwork(nn.Module):
         return mu, std
 
     def save_checkpoint(self):
-        os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
+        checkpoint_dir = os.path.dirname(self.checkpoint_file)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        # Normaliser le chemin pour éviter les problèmes de format mixte sur Windows
+        normalized_path = os.path.normpath(self.checkpoint_file)
         T.save({
             'model_state_dict': self.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict()
-        }, self.checkpoint_file)
+        }, normalized_path)
 
     def load_checkpoint(self):
         if not os.path.exists(self.checkpoint_file):
@@ -185,11 +188,14 @@ class CriticNetwork(nn.Module):
         return value
 
     def save_checkpoint(self):
-        os.makedirs(os.path.dirname(self.checkpoint_file), exist_ok=True)
+        checkpoint_dir = os.path.dirname(self.checkpoint_file)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        # Normaliser le chemin pour éviter les problèmes de format mixte sur Windows
+        normalized_path = os.path.normpath(self.checkpoint_file)
         T.save({
             'model_state_dict': self.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict()
-        }, self.checkpoint_file)
+        }, normalized_path)
 
     def load_checkpoint(self):
         if not os.path.exists(self.checkpoint_file):

@@ -19,6 +19,9 @@ from core.net import Net
 from core.table import Table
 from engine.collision import check_ball_paddle, check_ball_net, check_table_collision
 
+# Limite de steps par épisode pour éviter les boucles infinies
+MAX_STEPS_PER_EPISODE = 500
+
 
 class PingPongEnv(gym.Env):
     """
@@ -173,7 +176,7 @@ class PingPongEnv(gym.Env):
             # Normal: x=50 (loin), Center: x=net_center (600)
             paddle_x = net_center - 240 - 100 * (self.training_phase)
             self.agent_paddle = Paddle(paddle_x, HEIGHT // 2 - 30, x_min=0, x_max=net_center)
-            self.opponent_paddle = Paddle(TABLE_Y + TABLE_WIDTH_PX//2 + OUT_MARGIN + RACKET_HEIGHT_PX//2, HEIGHT // 2 - 30, x_min=net_center, x_max=WIDTH)
+            self.opponent_paddle = Paddle(TABLE_Y + TABLE_WIDTH_PX//2 + OUT_MARGIN + RACKET_HEIGHT_PX//2, 10, x_min=net_center, x_max=WIDTH)
         else:
             # Normal: x=WIDTH-60 (loin), Center: x=net_center (600)
             paddle_x = net_center + 240 + 100 * (self.training_phase)
@@ -468,6 +471,7 @@ class PingPongEnv(gym.Env):
             'out': False,
             'service_fault': False,
             'ball_out_bottom': False,
+            'timeout': False,
         }
         
         # Volley (obstruction) - vérifier pour les deux côtés
@@ -527,6 +531,15 @@ class PingPongEnv(gym.Env):
             self.ball_in_play = False
             self._update_scores("Service invalide!")
         
+        # Limite de steps pour éviter les boucles infinies
+        if not terminated and self.steps >= MAX_STEPS_PER_EPISODE:
+            faults['timeout'] = True
+            # Considérer comme une perte pour l'agent (l'épisode dure trop longtemps = échec)
+            agent_is_left = (self.agent_side == "left")
+            self.point_winner_side = 'right' if agent_is_left else 'left'
+            terminated = True
+            self.ball_in_play = False
+            self._update_scores(f"Timeout après {MAX_STEPS_PER_EPISODE} steps!")
         
         observation = self._get_observation()
         info = {
@@ -602,7 +615,7 @@ class PingPongEnv(gym.Env):
         
         move_x = 0.0
         
-        return np.array([move_x, move_y, 0.0], dtype=np.float32)
+        return np.array([move_x, 0, 0.0], dtype=np.float32) # adversaire qui joue pas
     
     def _check_paddle_collision(self, paddle, who):
         """Vérifie la collision balle-raquette et met à jour last_hit_by."""
@@ -621,7 +634,7 @@ class PingPongEnv(gym.Env):
         Rewards are scaled by dividing by 15.0 (the max absolute reward value).
         """
         reward = 0.0
-        REWARD_SCALE = 15.0  # Normalisation : tous les rewards divisés par cette valeur
+        REWARD_SCALE = 10.0  # Normalisation : tous les rewards divisés par cette valeur
         
         agent_is_left = (self.agent_side == "left")
         winner_side = info.get('winner_side')
@@ -636,7 +649,7 @@ class PingPongEnv(gym.Env):
             
             if agent_wins:
                 # Doit être > (Hit + Bounce + Shaping accumulé)
-                reward = 15.0 / REWARD_SCALE  # = 1.0
+                reward = 10.0 / REWARD_SCALE  # = 1.0
                 log_msg = "🟢 WIN"
             else:
                 # La défaite doit faire mal pour motiver la défense
@@ -695,7 +708,7 @@ class PingPongEnv(gym.Env):
             
             # Toucher la balle : C'est bien, mais c'est le minimum syndical
             if self.pending_hit_reward:
-                reward += 3.0 / REWARD_SCALE  # = 0.2
+                reward += 2.0 / REWARD_SCALE  # = 0.2
                 self.pending_hit_reward = False
             
             # Mettre la balle chez l'adversaire (rebond valide) : C'est très bien
@@ -704,7 +717,7 @@ class PingPongEnv(gym.Env):
             
             if agent_hits > 0 and ball_bounces_opponent > 0:
                 if not self.bounce_reward_given:
-                    reward += 6.0 / REWARD_SCALE  # = 0.4 (envoie un signal fort)
+                    reward += 8.0 / REWARD_SCALE  # = 0.4 (envoie un signal fort)
                     self.bounce_reward_given = True
         
         return reward

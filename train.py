@@ -438,14 +438,13 @@ def train(n_games=1000, N=256, batch_size=64, n_epochs=15, alpha=0.0003,
     # Compteur du nombre d'appels à learn() pour les graphes
     learn_call_count = 0 if training_state is None else training_state.get('learn_call_count', 0)
     
-    # Métriques GLOBALES
-    # Rewards par épisode, mais ENTROPY/STD/CRITIC par learn
-    all_rewards = [] if training_state is None else training_state['all_rewards']
-    all_entropy = [] if training_state is None else training_state['all_entropy']
-    all_std = ({'move_x': [], 'move_y': [], 'rotation': []} if training_state is None 
-               else training_state['all_std'])
-    all_critic_loss = [] if training_state is None else training_state['all_critic_loss']
-    all_values = [] if training_state is None else training_state.get('all_values', [])
+    # Métriques GLOBALES (déjà restaurées ci-dessus si resume=True)
+    if training_state is None:
+        all_rewards = []
+        all_entropy = []
+        all_std = {'move_x': [], 'move_y': [], 'rotation': []}
+        all_critic_loss = []
+        all_values = []
     
     # Métriques pour tracking détaillé par siècle (100 épisodes)
     century_rewards = []  # Rewards par épisode pour le siècle en cours
